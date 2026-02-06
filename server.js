@@ -84,7 +84,7 @@ io.on('connection', (socket) => {
             id, title: d.title, owner: me.username, 
             password: d.password || null, hasPass: !!d.password, 
             mode: d.mode, msgs: [], pinned: null, bannedWords: [],
-            isDm: false 
+            isDm: false, admins: [] 
         };
         write('rooms.json', r); 
         io.to('lobby').emit('update_rooms', getPublicRooms(r));
@@ -102,7 +102,8 @@ io.on('connection', (socket) => {
                 id: dmId, title: targetUser, // Title меняется динамически на клиенте
                 participants: participants,
                 isDm: true, msgs: [], pinned: null, bannedWords: [],
-                owner: 'system' // В ЛС нет владельца
+                owner: 'system', // В ЛС нет владельца
+                admins: []
             };
             write('rooms.json', rooms);
         }
@@ -176,16 +177,37 @@ io.on('connection', (socket) => {
             // !запрет(слово)
             const banMatch = d.text.match(/^!запрет\((.+)\)$/);
             if(banMatch) {
-                if(r.owner !== me.username && !isAdmin) return socket.emit('error', 'Только владелец может запрещать слова.');
+                if(r.owner !== me.username && !isAdmin && !(r.admins || []).includes(me.username)) return socket.emit('error', 'Только владелец или со-админ может запрещать слова.');
                 const word = banMatch[1].trim();
                 r.bannedWords.push(word);
                 write('rooms.json', rooms);
                 
                 // Системное сообщение о запрете
-                const sysMsg = createMsg('System', null, `Слово "${word}" теперь запрещено.`, 'text', r.owner);
+                const sysMsg = createMsg('System', null, `Слово "${word}" теперь запрещено.`, 'text', r);
                 r.msgs.push(sysMsg);
                 io.to(d.roomId).emit('new_msg', sysMsg);
                 return; // Команда не публикуется как сообщение пользователя
+            }
+
+            // !админ(пользователь) — назначить со-админа в этом чате
+            const coAdminMatch = d.text.match(/^!админ\((.+)\)$/);
+            if(coAdminMatch) {
+                if(r.isDm) return socket.emit('error', 'В личных сообщениях нет со-админов.');
+                if(r.owner !== me.username && !isAdmin) return socket.emit('error', 'Только владелец комнаты или админ может назначать со-админов.');
+                
+                const targetName = coAdminMatch[1].trim();
+                if(!targetName || targetName === r.owner) return;
+                
+                if(!r.admins) r.admins = [];
+                if(!r.admins.includes(targetName)) {
+                    r.admins.push(targetName);
+                    write('rooms.json', rooms);
+
+                    const sysMsg = createMsg('System', null, `Пользователь ${targetName} назначен со-админом этого чата.`, 'text', r);
+                    r.msgs.push(sysMsg);
+                    io.to(d.roomId).emit('new_msg', sysMsg);
+                }
+                return;
             }
 
             // !факт(текст)
@@ -200,7 +222,7 @@ io.on('connection', (socket) => {
                     <b>🔍 Поисковый запрос:</b> ${query}<br>
                     <a href="${searchLink}" target="_blank" style="color:#3498db">👉 Найти в Google</a><br>
                     <a href="${wikiLink}" target="_blank" style="color:#3498db">📖 Читать в Википедии</a>
-                `, 'text', r.owner);
+                `, 'text', r);
                 
                 r.msgs.push(sysMsg);
                 write('rooms.json', rooms);
@@ -210,9 +232,9 @@ io.on('connection', (socket) => {
         }
 
         // Стандартная отправка
-        if (r.mode === 'channel' && r.owner !== me.username && !isAdmin) return;
+        if (r.mode === 'channel' && r.owner !== me.username && !isAdmin && !(r.admins || []).includes(me.username)) return;
 
-        const m = createMsg(me.username, me.font, d.text, d.type, r.owner, d.file, d.replyTo);
+        const m = createMsg(me.username, me.font, d.text, d.type, r, d.file, d.replyTo);
         
         r.msgs.push(m); 
         if(r.msgs.length > 200) r.msgs.shift();
@@ -230,18 +252,21 @@ io.on('connection', (socket) => {
         }
     });
 
-    function createMsg(user, font, text, type, roomOwner, file = null, replyTo = null) {
+    function createMsg(user, font, text, type, room, file = null, replyTo = null) {
         return {
             id: Date.now() + Math.random(), 
             user, userFont: font, text, type, file, 
             time: new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}), 
-            roomOwner, replyTo
+            roomId: room.id,
+            roomOwner: room.owner,
+            roomAdmins: room.admins || [],
+            replyTo
         };
     }
 
     socket.on('delete_msg', (d) => {
         const rooms = read('rooms.json'), r = rooms[d.roomId];
-        if(r && (r.owner === me.username || isAdmin || r.isDm)) { // В ЛС любой может удалять (условно)
+        if(r && (r.owner === me.username || isAdmin || (r.admins || []).includes(me.username) || r.isDm)) { // В ЛС любой может удалять (условно)
             r.msgs = r.msgs.filter(m => m.id != d.msgId);
             if(r.pinned && r.pinned.id == d.msgId) r.pinned = null;
             write('rooms.json', rooms); io.to(d.roomId).emit('msg_deleted', d.msgId);
@@ -251,7 +276,7 @@ io.on('connection', (socket) => {
 
     socket.on('pin_msg', (d) => {
         const rooms = read('rooms.json'), r = rooms[d.roomId];
-        if(r && (r.owner === me.username || isAdmin)) {
+        if(r && (r.owner === me.username || isAdmin || (r.admins || []).includes(me.username))) {
             r.pinned = d.msgId ? r.msgs.find(m => m.id == d.msgId) : null;
             write('rooms.json', rooms); io.to(d.roomId).emit('update_pin', r.pinned);
         }
