@@ -3,6 +3,7 @@ const http = require('http');
 const { Server } = require("socket.io");
 const fs = require('fs');
 const path = require('path');
+const fetch = require('node-fetch');
 
 const app = express();
 const server = http.createServer(app);
@@ -19,7 +20,11 @@ const read = (f) => {
 const write = (f, d) => fs.writeFileSync(path.join(DATA_DIR, f), JSON.stringify(d, null, 2));
 
 const init = (f, d) => { if (!fs.existsSync(path.join(DATA_DIR, f))) write(f, d); };
-init('users.json', []); init('rooms.json', {});
+init('users.json', []); init('rooms.json', {}); init('clans.json', {}); init('nek_docs.json', []);
+
+const BOT_NAME = "Нек";
+const HF_API_KEY = "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";
+const HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"; // Модель для генерации текста
 
 app.use('/fonts', express.static(FONTS_DIR));
 app.use(express.static(__dirname));
@@ -44,6 +49,162 @@ const getUserDMs = (rooms, username) => {
     return dms;
 };
 
+const getSelfClan = (username) => {
+    const clans = read('clans.json');
+    for (let id in clans) {
+        const c = clans[id];
+        if (c.members && c.members.includes(username)) {
+            return { id, name: c.name, tag: c.tag, owner: c.owner, members: c.members };
+        }
+    }
+    return null;
+};
+
+const getClansSummary = () => {
+    const clans = read('clans.json');
+    return Object.values(clans).map(c => ({
+        id: c.id,
+        name: c.name,
+        tag: c.tag,
+        membersCount: (c.members || []).length
+    }));
+};
+
+// --- Бот Нек ---
+const getDocs = () => {
+    return read('nek_docs.json');
+};
+
+const addDoc = (title, content, author) => {
+    const docs = getDocs();
+    docs.push({
+        id: Date.now(),
+        title,
+        content,
+        author,
+        createdAt: new Date().toISOString()
+    });
+    write('nek_docs.json', docs);
+    return docs;
+};
+
+const getDocsContext = () => {
+    const docs = getDocs();
+    if(docs.length === 0) return "Документация пока пуста.";
+    return docs.map(d => `[${d.title}] ${d.content}`).join('\n\n');
+};
+
+const getMessengerInfo = () => {
+    return `VOY v4.0 Messenger - мессенджер для неографий (конструируемых письменностей).
+
+Основные функции:
+- Комнаты и личные сообщения
+- Загрузка пользовательских шрифтов (PUA символы)
+- НЕОГРАФИИ: добавление букв как картинок с автоматическим назначением PUA кодов
+- Кланы: группы пользователей
+- Команды: !факт(запрос), !запрет(слово), !админ(пользователь)
+- Со-админы в комнатах
+- Закрепление сообщений
+- Поиск пользователей
+
+Команды бота:
+- "документация" или "доки" - показать документацию
+- "добавить [название]: [содержание]" - добавить запись в документацию
+- Любые вопросы о мессенджере - отвечу на основе документации и знаний о системе.`;
+};
+
+async function callHuggingFaceAPI(prompt, context = '') {
+    try {
+        const systemPrompt = `Ты Нек, бот-документалист мессенджера VOY v4.0. Твоя задача - помогать пользователям разобраться в функциях мессенджера и вести документацию.
+
+${getMessengerInfo()}
+
+Текущая документация:
+${getDocsContext()}
+
+Контекст чата: ${context}
+
+Отвечай кратко и по делу на русском языке. Если вопрос не связан с мессенджером, вежливо скажи, что ты специализируешься на документации мессенджера.`;
+
+        const messages = [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: prompt }
+        ];
+
+        const response = await fetch(`https://api-inference.huggingface.co/models/${HF_MODEL}`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${HF_API_KEY}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                inputs: messages.map(m => m.content).join('\n\n'),
+                parameters: {
+                    max_new_tokens: 200,
+                    temperature: 0.7,
+                    return_full_text: false
+                }
+            })
+        });
+
+        if (!response.ok) {
+            // Если модель загружается, попробуем альтернативный подход
+            if (response.status === 503) {
+                console.log('Model is loading, using fallback response');
+                return `Привет! Я Нек, бот-документалист. Сейчас модель загружается. Используйте команды: "документация" для просмотра документации или "добавить [название]: [содержание]" для добавления записи.`;
+            }
+            const errorText = await response.text();
+            console.error('HF API Error:', response.status, errorText);
+            return null;
+        }
+
+        const data = await response.json();
+        let result = null;
+        
+        if (Array.isArray(data) && data.length > 0) {
+            if (data[0].generated_text) {
+                result = data[0].generated_text.trim();
+            } else if (data[0].text) {
+                result = data[0].text.trim();
+            }
+        } else if (data.generated_text) {
+            result = data.generated_text.trim();
+        } else if (data.text) {
+            result = data.text.trim();
+        }
+        
+        // Очистка ответа от лишних частей промпта
+        if (result) {
+            const lines = result.split('\n');
+            result = lines[0].trim();
+            if (result.length > 300) result = result.substring(0, 300) + '...';
+        }
+        
+        return result;
+    } catch (error) {
+        console.error('HF API call failed:', error);
+        return null;
+    }
+}
+
+function shouldRespondToBot(text) {
+    const lower = text.toLowerCase();
+    return lower.includes('нек') || 
+           lower.includes('бот') || 
+           lower.startsWith('!нек') ||
+           lower.includes('документация') ||
+           lower.includes('доки') ||
+           lower.includes('помощь');
+}
+
+function parseDocCommand(text) {
+    const match = text.match(/добавить\s+([^:]+):\s*(.+)/i);
+    if (match) {
+        return { title: match[1].trim(), content: match[2].trim() };
+    }
+    return null;
+}
+
 io.on('connection', (socket) => {
     let me = null;
     let isAdmin = false;
@@ -52,19 +213,20 @@ io.on('connection', (socket) => {
         const u = read('users.json');
         if (u.find(x => x.username === d.username)) return socket.emit('error', 'Ник занят!');
         if (d.username === ADMIN_LOGIN || d.username === 'System') return socket.emit('error', 'Этот ник зарезервирован.');
-        u.push({ username: d.username, password: d.password, bio: "", font: '', avatar: '', banned: false });
+        u.push({ username: d.username, password: d.password, bio: "", font: '', avatar: '', banned: false, clan: null });
         write('users.json', u); socket.emit('alert', 'Готово! Войдите.');
     });
 
     socket.on('login', (d) => {
         if (d.username === ADMIN_LOGIN && d.password === ADMIN_PASS) {
-            me = { username: ADMIN_LOGIN, font: '', avatar: '', bio: 'System Administrator' };
+            me = { username: ADMIN_LOGIN, font: '', avatar: '', bio: 'System Administrator', clan: null };
             isAdmin = true;
         } else {
             const users = read('users.json');
             const user = users.find(x => x.username === d.username && x.password === d.password);
             if (!user) return socket.emit('error', 'Ошибка входа');
             if (user.banned) return socket.emit('error', 'ВЫ ЗАБАНЕНЫ НАВСЕГДА.');
+            if(typeof user.clan === 'undefined') user.clan = null;
             me = user; isAdmin = false;
         }
 
@@ -72,6 +234,8 @@ io.on('connection', (socket) => {
         const rooms = read('rooms.json');
         socket.emit('update_rooms', getPublicRooms(rooms));
         socket.emit('update_dms', getUserDMs(rooms, me.username));
+        socket.emit('clan_self', getSelfClan(me.username));
+        socket.emit('clans_list', getClansSummary());
         socket.join('lobby'); // Для общих обновлений
     });
 
@@ -242,6 +406,54 @@ io.on('connection', (socket) => {
         write('rooms.json', rooms); 
         io.to(d.roomId).emit('new_msg', m);
         
+        // Обработка бота Нек
+        if(d.type === 'text' && shouldRespondToBot(d.text) && me.username !== BOT_NAME) {
+            setTimeout(async () => {
+                const docCmd = parseDocCommand(d.text);
+                if(docCmd) {
+                    addDoc(docCmd.title, docCmd.content, me.username);
+                    const botMsg = createMsg(BOT_NAME, null, `✅ Добавлена запись в документацию: "${docCmd.title}"`, 'text', r);
+                    r.msgs.push(botMsg);
+                    if(r.msgs.length > 200) r.msgs.shift();
+                    write('rooms.json', rooms);
+                    io.to(d.roomId).emit('new_msg', botMsg);
+                } else if(d.text.toLowerCase().includes('документация') || d.text.toLowerCase().includes('доки')) {
+                    const docs = getDocs();
+                    if(docs.length === 0) {
+                        const botMsg = createMsg(BOT_NAME, null, '📚 Документация пока пуста. Используйте команду "добавить [название]: [содержание]" для добавления записей.', 'text', r);
+                        r.msgs.push(botMsg);
+                        if(r.msgs.length > 200) r.msgs.shift();
+                        write('rooms.json', rooms);
+                        io.to(d.roomId).emit('new_msg', botMsg);
+                    } else {
+                        const docsList = docs.slice(-5).map(d => `• ${d.title}: ${d.content.substring(0, 100)}${d.content.length > 100 ? '...' : ''}`).join('\n');
+                        const botMsg = createMsg(BOT_NAME, null, `📚 Последние записи документации:\n\n${docsList}\n\nВсего записей: ${docs.length}`, 'text', r);
+                        r.msgs.push(botMsg);
+                        if(r.msgs.length > 200) r.msgs.shift();
+                        write('rooms.json', rooms);
+                        io.to(d.roomId).emit('new_msg', botMsg);
+                    }
+                } else {
+                    // Используем Hugging Face API для ответа
+                    const recentMsgs = r.msgs.slice(-5).map(msg => `${msg.user}: ${msg.text}`).join('\n');
+                    const hfResponse = await callHuggingFaceAPI(d.text, recentMsgs);
+                    if(hfResponse) {
+                        const botMsg = createMsg(BOT_NAME, null, hfResponse, 'text', r);
+                        r.msgs.push(botMsg);
+                        if(r.msgs.length > 200) r.msgs.shift();
+                        write('rooms.json', rooms);
+                        io.to(d.roomId).emit('new_msg', botMsg);
+                    } else {
+                        const botMsg = createMsg(BOT_NAME, null, 'Извините, сейчас не могу ответить. Попробуйте позже или используйте команды: "документация", "добавить [название]: [содержание]".', 'text', r);
+                        r.msgs.push(botMsg);
+                        if(r.msgs.length > 200) r.msgs.shift();
+                        write('rooms.json', rooms);
+                        io.to(d.roomId).emit('new_msg', botMsg);
+                    }
+                }
+            }, 500);
+        }
+        
         // Если это ЛС, обновляем списки участников (чтобы чат поднялся наверх или появился)
         if(r.isDm) {
             r.participants.forEach(p => {
@@ -337,6 +549,95 @@ io.on('connection', (socket) => {
         const u = read('users.json'), idx = u.findIndex(x => x.username === me.username);
         u[idx].bio = d.bio || u[idx].bio; u[idx].avatar = d.avatar || u[idx].avatar;
         write('users.json', u); me = u[idx]; socket.emit('auth_ok', me);
+    });
+
+    // --- Clans ---
+
+    socket.on('get_clans', () => {
+        if(!me) return;
+        socket.emit('clan_self', getSelfClan(me.username));
+        socket.emit('clans_list', getClansSummary());
+    });
+
+    socket.on('create_clan', (d) => {
+        if(!me) return;
+        if(isAdmin) return socket.emit('error', 'Админ не может создавать кланы.');
+        const name = (d.name || '').trim();
+        const tag = (d.tag || '').trim();
+        if(!name) return socket.emit('error', 'Введите название клана.');
+        const clans = read('clans.json');
+        if(getSelfClan(me.username)) return socket.emit('error', 'Сначала выйдите из текущего клана.');
+        for(let id in clans) {
+            if(clans[id].name.toLowerCase() === name.toLowerCase()) return socket.emit('error', 'Клан с таким названием уже есть.');
+            if(tag && clans[id].tag && clans[id].tag.toLowerCase() === tag.toLowerCase()) return socket.emit('error', 'Клан с таким тегом уже есть.');
+        }
+        const id = 'clan_' + Date.now();
+        clans[id] = { id, name, tag, owner: me.username, members: [me.username], createdAt: Date.now() };
+        write('clans.json', clans);
+
+        // обновляем пользователя
+        const users = read('users.json');
+        const idx = users.findIndex(u => u.username === me.username);
+        if(idx !== -1) {
+            users[idx].clan = id;
+            write('users.json', users);
+            me = users[idx];
+        }
+
+        socket.emit('clan_self', getSelfClan(me.username));
+        io.emit('clans_list', getClansSummary());
+    });
+
+    socket.on('join_clan', (clanId) => {
+        if(!me) return;
+        if(isAdmin) return socket.emit('error', 'Админ не может вступать в кланы.');
+        if(getSelfClan(me.username)) return socket.emit('error', 'Вы уже состоите в клане.');
+        const clans = read('clans.json');
+        const c = clans[clanId];
+        if(!c) return socket.emit('error', 'Клан не найден.');
+        c.members = c.members || [];
+        if(!c.members.includes(me.username)) c.members.push(me.username);
+        write('clans.json', clans);
+
+        const users = read('users.json');
+        const idx = users.findIndex(u => u.username === me.username);
+        if(idx !== -1) {
+            users[idx].clan = clanId;
+            write('users.json', users);
+            me = users[idx];
+        }
+
+        socket.emit('clan_self', getSelfClan(me.username));
+        io.emit('clans_list', getClansSummary());
+    });
+
+    socket.on('leave_clan', () => {
+        if(!me) return;
+        const current = getSelfClan(me.username);
+        if(!current) return;
+        const clans = read('clans.json');
+        const c = clans[current.id];
+        if(!c) return;
+        c.members = (c.members || []).filter(u => u !== me.username);
+        if(c.members.length === 0) {
+            delete clans[current.id];
+        } else {
+            if(c.owner === me.username) {
+                c.owner = c.members[0]; // передаём владельца первому оставшемуся
+            }
+        }
+        write('clans.json', clans);
+
+        const users = read('users.json');
+        const idx = users.findIndex(u => u.username === me.username);
+        if(idx !== -1) {
+            users[idx].clan = null;
+            write('users.json', users);
+            me = users[idx];
+        }
+
+        socket.emit('clan_self', getSelfClan(me.username));
+        io.emit('clans_list', getClansSummary());
     });
 });
 
