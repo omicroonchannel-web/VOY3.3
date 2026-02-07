@@ -59,10 +59,28 @@
         <div class="row"><button style="flex:1" onclick="auth('login')">ВОЙТИ</button><button style="flex:1; background:#444" onclick="auth('register')">РЕГИСТРАЦИЯ</button></div>
     </div>
 
+    <div id="scr-shop" class="screen">
+        <div class="header"><button onclick="show('scr-lobby')">←</button><b>Магазин</b></div>
+        <div style="padding:15px; overflow-y:auto;">
+            <div style="margin-bottom:10px; display:flex; gap:8px;">
+                <input id="item-title" placeholder="Название товара">
+                <input id="item-price" placeholder="Цена" style="width:100px">
+            </div>
+            <textarea id="item-desc" placeholder="Описание (опционально)" style="height:60px"></textarea>
+            <div style="display:flex; gap:8px; margin-top:8px;"><button onclick="createItem()">Создать товар</button><button onclick="socket.emit('list_items')" class="btn-small">Обновить</button></div>
+            <hr style="border-color:#333; margin:12px 0">
+            <div id="shop-list"></div>
+        </div>
+    </div>
+
     <div id="scr-lobby" class="screen">
         <div class="header">
             <img id="my-ava-mini" class="ava" onclick="show('scr-profile')">
-            <div style="flex:1"><b id="my-nick-disp">User</b> <span id="admin-tag" style="display:none" class="badge-admin">ADMIN</span></div>
+            <div style="flex:1; display:flex; align-items:center; gap:10px">
+                <div><b id="my-nick-disp">User</b> <span id="admin-tag" style="display:none" class="badge-admin">ADMIN</span></div>
+                <div style="font-size:0.9em; opacity:0.9">Ъмън: <b id="my-balance">0</b></div>
+                <button class="btn-small" onclick="openShop()">Магазин</button>
+            </div>
             <button class="btn-small" onclick="show('scr-clans')">КЛАНЫ</button>
             <button class="btn-small" onclick="show('scr-neo')">НЕО</button>
             <button class="btn-small" onclick="socket.emit('refresh_lists')">↻</button>
@@ -177,7 +195,10 @@
                             <div id="clan-self-title"><b>Клан</b></div>
                             <div id="clan-self-owner" style="font-size:0.8em; opacity:0.8;">Владелец: ...</div>
                         </div>
-                        <button class="btn-small btn-danger" onclick="leaveClan()">Покинуть клан</button>
+                            <div style="display:flex; gap:8px; align-items:center">
+                                <button class="btn-small" onclick="openMyClanChat()">Открыть чат клана</button>
+                                <button class="btn-small btn-danger" onclick="leaveClan()">Покинуть клан</button>
+                            </div>
                     </div>
                     <div id="clan-self-members" style="margin-top:8px; font-size:0.85em; opacity:0.9;"></div>
                 </div>
@@ -236,6 +257,7 @@
         loadNeoLetters();
         renderNeoLetters();
         socket.emit('get_clans');
+        socket.emit('get_balance');
         show('scr-lobby');
     });
 
@@ -358,6 +380,75 @@
         clansList = list || [];
         renderClansList();
     });
+
+    // Clan leaderboard
+    function loadClanLeaderboard() { socket.emit('get_clan_leaderboard'); }
+    socket.on('clan_leaderboard', list => {
+        // Ensure a leaderboard section exists
+        let el = document.getElementById('clan-leaderboard');
+        if(!el) {
+            el = document.createElement('div'); el.id = 'clan-leaderboard';
+            const parent = document.querySelector('#scr-clans > div'); if(parent) parent.appendChild(el);
+        }
+        el.innerHTML = '<h3 style="margin-top:10px">Топ кланов</h3>' + (list.length ? list.map((c, i) => `\n<div style="padding:8px; background:#333; border-radius:6px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;"><div><b>${i+1}. ${c.name}${c.tag?(' ['+c.tag+']') : ''}</b><div style="font-size:0.85em; opacity:0.8">Участников: ${c.membersCount} • Всего ъмънов: ${c.totalBalance}</div></div><div><button class=\"btn-small\" onclick=\"peekClanPrompt('${c.id}')\">Подглядеть (780)</button></div></div>`).join('') : '<div style="color:#777; padding:8px">Пока пусто</div>');
+    });
+
+    function openMyClanChat() {
+        if(!myClan) return alert('Вы не в клане');
+        const roomId = 'clanroom_' + myClan.id; curRoom = roomId; socket.emit('join_room', { id: roomId });
+    }
+
+    function peekClanPrompt(clanId) {
+        if(!confirm('Заплатить 780 Ъмън и увидеть одно сообщение из указанного клана?')) return;
+        socket.emit('peek_clan_message', { clanId });
+    }
+
+    socket.on('peek_result', d => {
+        if(d && d.ok && d.message) {
+            alert('Сообщение:\n' + d.message.user + ': ' + d.message.text);
+            socket.emit('get_balance');
+        } else if(d && d.error) alert(d.error);
+    });
+
+
+    socket.on('users_update', () => {
+        if(me) socket.emit('get_balance');
+    });
+
+    socket.on('balance', b => {
+        const val = (b && b.balance) || b || 0;
+        document.getElementById('my-balance').innerText = val;
+        if(me) me.balance = val;
+    });
+
+    // Shop
+    function openShop() { socket.emit('list_items'); show('scr-shop'); }
+
+    socket.on('items_list', items => {
+        const box = document.getElementById('shop-list'); box.innerHTML = '';
+        (items||[]).forEach(it => {
+            const d = document.createElement('div'); d.style = 'padding:10px; background:#333; margin-bottom:8px; border-radius:6px;';
+            d.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;"><div><b>${it.title}</b><div style="font-size:0.85em; opacity:0.8">${it.description||''}</div></div><div style="text-align:right"><div style="font-weight:bold">${it.price} Ъмън</div><button onclick="buyItem('${it.id}')">Купить</button></div></div>`;
+            box.appendChild(d);
+        });
+    });
+
+    function createItem() {
+        const t = document.getElementById('item-title').value; const p = Number(document.getElementById('item-price').value||0);
+        const desc = document.getElementById('item-desc').value;
+        if(!t || isNaN(p)) return alert('Введите название и корректную цену');
+        socket.emit('create_item', { title: t, price: p, description: desc });
+        document.getElementById('item-title').value = ''; document.getElementById('item-price').value = ''; document.getElementById('item-desc').value = '';
+        socket.emit('list_items');
+    }
+
+    function buyItem(id) { if(!confirm('Купить товар?')) return; socket.emit('buy_item', id); }
+
+    socket.on('purchase_ok', d => {
+        alert('Покупка успешна! Баланс: ' + (d.balance||0));
+        document.getElementById('my-balance').innerText = d.balance||0;
+    });
+
 
     socket.on('room_closed', () => { alert('Комната удалена.'); show('scr-lobby'); curRoom = null; });
     function createRoom() {

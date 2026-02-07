@@ -21,13 +21,36 @@ const write = (f, d) => fs.writeFileSync(path.join(DATA_DIR, f), JSON.stringify(
 
 const init = (f, d) => { if (!fs.existsSync(path.join(DATA_DIR, f))) write(f, d); };
 init('users.json', []); init('rooms.json', {}); init('clans.json', {}); init('nek_docs.json', []);
+init('items.json', []);
+init('transactions.json', []);
 
 const BOT_NAME = "Нек";
 const HF_API_KEY = "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";
 const HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"; // Модель для генерации текста
+const REWARD_SECRET = process.env.REWARD_SECRET || 'local_dev_reward_secret';
 
 app.use('/fonts', express.static(FONTS_DIR));
 app.use(express.static(__dirname));
+app.use(express.json());
+
+// Endpoint для внешних скриптов (например, bash) чтобы наградить пользователя ъмънами
+app.post('/reward', (req, res) => {
+    const { secret, username, amount, note } = req.body || {};
+    if (secret !== REWARD_SECRET) return res.status(403).json({ error: 'forbidden' });
+    const users = read('users.json');
+    const idx = users.findIndex(u => u.username === username);
+    if (idx === -1) return res.status(404).json({ error: 'user_not_found' });
+    const value = Number(amount || 0);
+    users[idx].balance = (users[idx].balance || 0) + value;
+    write('users.json', users);
+
+    const txs = read('transactions.json');
+    txs.push({ id: Date.now(), type: 'reward', to: username, amount: value, note: note || '', time: new Date().toISOString() });
+    write('transactions.json', txs);
+
+    io.emit('users_update');
+    return res.json({ ok: true, balance: users[idx].balance });
+});
 
 const ADMIN_LOGIN = "Омикрун";
 const ADMIN_PASS = "omicroon1326";
@@ -213,7 +236,7 @@ io.on('connection', (socket) => {
         const u = read('users.json');
         if (u.find(x => x.username === d.username)) return socket.emit('error', 'Ник занят!');
         if (d.username === ADMIN_LOGIN || d.username === 'System') return socket.emit('error', 'Этот ник зарезервирован.');
-        u.push({ username: d.username, password: d.password, bio: "", font: '', avatar: '', banned: false, clan: null });
+        u.push({ username: d.username, password: d.password, bio: "", font: '', avatar: '', banned: false, clan: null, balance: 235, inventory: [] });
         write('users.json', u); socket.emit('alert', 'Готово! Войдите.');
     });
 
@@ -309,6 +332,11 @@ io.on('connection', (socket) => {
         // Проверка прав для ЛС
         if(r.isDm && !isAdmin && !r.participants.includes(me.username)) {
             return socket.emit('error', 'Это приватный чат.');
+        }
+
+        // Проверка прав для приватных клановых чатов
+        if(r.isClan && !isAdmin && !(r.participants || []).includes(me.username)) {
+            return socket.emit('error', 'Доступ к чату клана доступен только участникам.');
         }
 
         if(!r.isDm && r.password && r.password !== d.password && !isAdmin) return socket.emit('error', 'Неверный пароль!');
@@ -559,6 +587,63 @@ io.on('connection', (socket) => {
         socket.emit('clans_list', getClansSummary());
     });
 
+    // Лидерборд кланов — сортировка по количеству участников, затем по сумме балансов участников
+    socket.on('get_clan_leaderboard', () => {
+        if(!me) return;
+        const clans = read('clans.json');
+        const users = read('users.json');
+        const list = Object.values(clans).map(c => {
+            const members = c.members || [];
+            const membersCount = members.length;
+            const totalBalance = members.reduce((s, m) => {
+                const u = users.find(x => x.username === m);
+                return s + ((u && Number(u.balance)) || 0);
+            }, 0);
+            return { id: c.id, name: c.name, tag: c.tag, membersCount, totalBalance };
+        });
+        list.sort((a,b) => { if(b.membersCount !== a.membersCount) return b.membersCount - a.membersCount; return b.totalBalance - a.totalBalance; });
+        socket.emit('clan_leaderboard', list);
+    });
+
+    // Подглядеть одно сообщение из чата другого клана за фиксированную плату (не сообщаем целевому клану)
+    socket.on('peek_clan_message', ({ clanId, msgId }) => {
+        if(!me) return;
+        const CLAN_PEEK_PRICE = 780;
+        const users = read('users.json');
+        const uidx = users.findIndex(u => u.username === me.username);
+        if(uidx === -1) return socket.emit('error', 'Пользователь не найден');
+        if((users[uidx].balance || 0) < CLAN_PEEK_PRICE) return socket.emit('error', 'Недостаточно ъмънов');
+
+        const clans = read('clans.json');
+        if(!clans[clanId]) return socket.emit('error', 'Клан не найден');
+
+        const rooms = read('rooms.json');
+        const clanRoomId = 'clanroom_' + clanId;
+        const room = rooms[clanRoomId];
+        if(!room) return socket.emit('error', 'Чат клана не найден');
+
+        // Находим сообщение: если передали msgId — ищем, иначе берём случайное
+        let msg = null;
+        if(msgId) msg = (room.msgs || []).find(m => String(m.id) === String(msgId));
+        if(!msg) {
+            const possible = room.msgs || [];
+            if(possible.length === 0) return socket.emit('error', 'В чате нет сообщений');
+            msg = possible[Math.floor(Math.random()*possible.length)];
+        }
+
+        // Списываем плату
+        users[uidx].balance = (users[uidx].balance || 0) - CLAN_PEEK_PRICE;
+        write('users.json', users);
+
+        const txs = read('transactions.json');
+        txs.push({ id: Date.now(), type: 'peek', by: me.username, clan: clanId, messageId: msg.id, amount: CLAN_PEEK_PRICE, time: new Date().toISOString() });
+        write('transactions.json', txs);
+
+        // Возвращаем сообщение только запрашивающему; не уведомляем целевой клан
+        socket.emit('peek_result', { ok: true, message: msg });
+        io.emit('users_update');
+    });
+
     socket.on('create_clan', (d) => {
         if(!me) return;
         if(isAdmin) return socket.emit('error', 'Админ не может создавать кланы.');
@@ -574,6 +659,27 @@ io.on('connection', (socket) => {
         const id = 'clan_' + Date.now();
         clans[id] = { id, name, tag, owner: me.username, members: [me.username], createdAt: Date.now() };
         write('clans.json', clans);
+
+        // Создаём приватный чат для клана
+        const rooms = read('rooms.json');
+        const clanRoomId = 'clanroom_' + id;
+        rooms[clanRoomId] = {
+            id: clanRoomId,
+            title: `Клан: ${name}`,
+            owner: me.username,
+            password: null,
+            hasPass: false,
+            mode: 'clan',
+            msgs: [],
+            pinned: null,
+            bannedWords: [],
+            isDm: false,
+            isClan: true,
+            clanId: id,
+            participants: [me.username],
+            admins: []
+        };
+        write('rooms.json', rooms);
 
         // обновляем пользователя
         const users = read('users.json');
@@ -607,6 +713,15 @@ io.on('connection', (socket) => {
             me = users[idx];
         }
 
+        // Добавляем участника в приватный чат клана
+        const rooms = read('rooms.json');
+        const clanRoomId = 'clanroom_' + clanId;
+        if(rooms[clanRoomId]) {
+            rooms[clanRoomId].participants = rooms[clanRoomId].participants || [];
+            if(!rooms[clanRoomId].participants.includes(me.username)) rooms[clanRoomId].participants.push(me.username);
+            write('rooms.json', rooms);
+        }
+
         socket.emit('clan_self', getSelfClan(me.username));
         io.emit('clans_list', getClansSummary());
     });
@@ -636,8 +751,71 @@ io.on('connection', (socket) => {
             me = users[idx];
         }
 
+        // Удаляем участника из приватного чата клана
+        const rooms = read('rooms.json');
+        const clanRoomId = 'clanroom_' + current.id;
+        if(rooms[clanRoomId]) {
+            rooms[clanRoomId].participants = (rooms[clanRoomId].participants || []).filter(u => u !== me.username);
+            // Если клан удалён (members length === 0), удалим и комнату
+            if(!clans[current.id]) delete rooms[clanRoomId];
+            write('rooms.json', rooms);
+        }
+
         socket.emit('clan_self', getSelfClan(me.username));
         io.emit('clans_list', getClansSummary());
+    });
+
+    // --- Marketplace & Currency ---
+
+    socket.on('get_balance', () => {
+        if(!me) return;
+        socket.emit('balance', { balance: me.balance || 0 });
+    });
+
+    socket.on('list_items', () => {
+        const items = read('items.json');
+        socket.emit('items_list', items || []);
+    });
+
+    socket.on('create_item', (d) => {
+        if(!me) return;
+        const items = read('items.json');
+        const id = 'item_' + Date.now();
+        const newItem = { id, owner: me.username, title: (d.title||'').toString(), price: Number(d.price||0), description: d.description || '', createdAt: new Date().toISOString() };
+        items.push(newItem); write('items.json', items);
+        io.emit('items_list', items);
+        socket.emit('create_item_ok', newItem);
+    });
+
+    socket.on('buy_item', (itemId) => {
+        if(!me) return;
+        const items = read('items.json');
+        const item = items.find(i => i.id === itemId);
+        if(!item) return socket.emit('error', 'Товар не найден');
+
+        const users = read('users.json');
+        const buyerIdx = users.findIndex(u => u.username === me.username);
+        if(buyerIdx === -1) return socket.emit('error', 'Пользователь не найден');
+
+        const buyer = users[buyerIdx];
+        if((buyer.balance || 0) < item.price) return socket.emit('error', 'Недостаточно ъмънов');
+
+        buyer.balance = (buyer.balance || 0) - item.price;
+        buyer.inventory = buyer.inventory || [];
+        buyer.inventory.push({ itemId: item.id, title: item.title, from: item.owner, purchasedAt: new Date().toISOString() });
+
+        const sellerIdx = users.findIndex(u => u.username === item.owner);
+        if(sellerIdx !== -1) users[sellerIdx].balance = (users[sellerIdx].balance || 0) + item.price;
+
+        write('users.json', users);
+
+        const txs = read('transactions.json');
+        txs.push({ id: Date.now(), type: 'purchase', itemId: item.id, itemTitle: item.title, from: item.owner, to: buyer.username, amount: item.price, time: new Date().toISOString() });
+        write('transactions.json', txs);
+
+        me = users[buyerIdx];
+        socket.emit('purchase_ok', { item, balance: me.balance });
+        io.emit('users_update');
     });
 });
 
