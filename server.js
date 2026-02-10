@@ -587,6 +587,84 @@ io.on('connection', (socket) => {
         socket.emit('clans_list', getClansSummary());
     });
 
+    // Запросы на вступление в клан (по заявке + доверенность)
+    socket.on('get_clan_requests', () => {
+        if(!me) return;
+        const clans = read('clans.json');
+        const current = Object.values(clans).find(c => (c.members || []).includes(me.username));
+        if(!current) return socket.emit('clan_requests', []);
+        socket.emit('clan_requests', current.joinRequests || []);
+    });
+
+    socket.on('request_join_clan', (clanId) => {
+        if(!me) return;
+        if(isAdmin) return socket.emit('error', 'Админ не может вступать в кланы.');
+        if(getSelfClan(me.username)) return socket.emit('error', 'Вы уже состоите в клане.');
+        const clans = read('clans.json');
+        const c = clans[clanId];
+        if(!c) return socket.emit('error', 'Клан не найден.');
+        c.members = c.members || [];
+        if(c.members.includes(me.username)) return socket.emit('error', 'Вы уже в клане.');
+        c.joinRequests = c.joinRequests || [];
+        if(c.joinRequests.find(r => r.user === me.username)) return socket.emit('error', 'Заявка уже отправлена.');
+        c.joinRequests.push({ user: me.username, time: Date.now() });
+        write('clans.json', clans);
+        socket.emit('clan_request_ok', { clanId });
+        io.emit('clan_requests_update', { clanId });
+    });
+
+    socket.on('approve_join_clan', ({ clanId, username }) => {
+        if(!me) return;
+        const clans = read('clans.json');
+        const c = clans[clanId];
+        if(!c) return socket.emit('error', 'Клан не найден.');
+        c.members = c.members || [];
+        if(!c.members.includes(me.username)) return socket.emit('error', 'Недостаточно прав.');
+        c.joinRequests = c.joinRequests || [];
+        const reqIdx = c.joinRequests.findIndex(r => r.user === username);
+        if(reqIdx === -1) return socket.emit('error', 'Заявка не найдена.');
+
+        const users = read('users.json');
+        const uidx = users.findIndex(u => u.username === username);
+        if(uidx === -1) {
+            c.joinRequests.splice(reqIdx, 1);
+            write('clans.json', clans);
+            return socket.emit('error', 'Пользователь не найден.');
+        }
+        if(users[uidx].clan && users[uidx].clan !== clanId) return socket.emit('error', 'Пользователь уже в другом клане.');
+
+        if(!c.members.includes(username)) c.members.push(username);
+        c.joinRequests.splice(reqIdx, 1);
+        write('clans.json', clans);
+
+        users[uidx].clan = clanId;
+        write('users.json', users);
+
+        const rooms = read('rooms.json');
+        const clanRoomId = 'clanroom_' + clanId;
+        if(rooms[clanRoomId]) {
+            rooms[clanRoomId].participants = rooms[clanRoomId].participants || [];
+            if(!rooms[clanRoomId].participants.includes(username)) rooms[clanRoomId].participants.push(username);
+            write('rooms.json', rooms);
+        }
+
+        io.emit('clan_refresh', { clanId });
+    });
+
+    socket.on('reject_join_clan', ({ clanId, username }) => {
+        if(!me) return;
+        const clans = read('clans.json');
+        const c = clans[clanId];
+        if(!c) return socket.emit('error', 'Клан не найден.');
+        c.members = c.members || [];
+        if(!c.members.includes(me.username)) return socket.emit('error', 'Недостаточно прав.');
+        c.joinRequests = c.joinRequests || [];
+        const before = c.joinRequests.length;
+        c.joinRequests = c.joinRequests.filter(r => r.user !== username);
+        if(c.joinRequests.length !== before) write('clans.json', clans);
+        io.emit('clan_requests_update', { clanId });
+    });
+
     // Лидерборд кланов — сортировка по количеству участников, затем по сумме балансов участников
     socket.on('get_clan_leaderboard', () => {
         if(!me) return;
@@ -657,7 +735,7 @@ io.on('connection', (socket) => {
             if(tag && clans[id].tag && clans[id].tag.toLowerCase() === tag.toLowerCase()) return socket.emit('error', 'Клан с таким тегом уже есть.');
         }
         const id = 'clan_' + Date.now();
-        clans[id] = { id, name, tag, owner: me.username, members: [me.username], createdAt: Date.now() };
+        clans[id] = { id, name, tag, owner: me.username, members: [me.username], joinRequests: [], createdAt: Date.now() };
         write('clans.json', clans);
 
         // Создаём приватный чат для клана
@@ -696,34 +774,7 @@ io.on('connection', (socket) => {
 
     socket.on('join_clan', (clanId) => {
         if(!me) return;
-        if(isAdmin) return socket.emit('error', 'Админ не может вступать в кланы.');
-        if(getSelfClan(me.username)) return socket.emit('error', 'Вы уже состоите в клане.');
-        const clans = read('clans.json');
-        const c = clans[clanId];
-        if(!c) return socket.emit('error', 'Клан не найден.');
-        c.members = c.members || [];
-        if(!c.members.includes(me.username)) c.members.push(me.username);
-        write('clans.json', clans);
-
-        const users = read('users.json');
-        const idx = users.findIndex(u => u.username === me.username);
-        if(idx !== -1) {
-            users[idx].clan = clanId;
-            write('users.json', users);
-            me = users[idx];
-        }
-
-        // Добавляем участника в приватный чат клана
-        const rooms = read('rooms.json');
-        const clanRoomId = 'clanroom_' + clanId;
-        if(rooms[clanRoomId]) {
-            rooms[clanRoomId].participants = rooms[clanRoomId].participants || [];
-            if(!rooms[clanRoomId].participants.includes(me.username)) rooms[clanRoomId].participants.push(me.username);
-            write('rooms.json', rooms);
-        }
-
-        socket.emit('clan_self', getSelfClan(me.username));
-        io.emit('clans_list', getClansSummary());
+        return socket.emit('error', 'Вступление в клан только по заявке и доверенности.');
     });
 
     socket.on('leave_clan', () => {

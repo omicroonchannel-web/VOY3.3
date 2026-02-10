@@ -6,43 +6,44 @@
     <title>VOY v4.0 | Messenger</title>
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        :root { --bg: #121212; --panel: #1e1e1e; --primary: #7289da; --text: #e0e0e0; --accent: #f1c40f; --danger: #e74c3c; --global-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+        :root { --bg: #121212; --panel: #1e1e1e; --panel-2: #252525; --panel-3: #333; --panel-4: #222; --input-bg: #2c2c2c; --input-border: #444; --border: #333; --border-strong: #444; --muted: #777; --button-secondary: #444; --primary: #7289da; --text: #e0e0e0; --accent: #f1c40f; --danger: #e74c3c; --msg-my: #3f4769; --msg-sys: #2c3e50; --pua-grid: #111; --ava-bg: #555; --global-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+        body[data-theme="light"] { --bg: #f4f6f9; --panel: #ffffff; --panel-2: #f1f3f6; --panel-3: #e7ebf0; --panel-4: #f7f9fb; --input-bg: #ffffff; --input-border: #c6cbd3; --border: #d6dbe2; --border-strong: #c6cbd3; --muted: #5f6771; --button-secondary: #e1e6ee; --primary: #2f5bff; --text: #1b1f24; --accent: #f0b429; --danger: #e0564a; --msg-my: #dbe6ff; --msg-sys: #e7f0ff; --pua-grid: #eef2f7; --ava-bg: #c7ced8; }
         body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--global-font); height: 100vh; display: flex; justify-content: center; }
-        #app { width: 100%; max-width: 500px; background: var(--panel); display: flex; flex-direction: column; border-left: 1px solid #333; border-right: 1px solid #333; position: relative; }
+        #app { width: 100%; max-width: 500px; background: var(--panel); display: flex; flex-direction: column; border-left: 1px solid var(--border); border-right: 1px solid var(--border); position: relative; }
         .screen { display: none; flex-direction: column; height: 100%; }
         .active { display: flex; }
-        input, textarea, button, select { background: #2c2c2c; border: 1px solid #444; color: white; padding: 12px; border-radius: 6px; margin: 5px 0; outline: none; width: 100%; box-sizing: border-box; }
-        button { background: var(--primary); cursor: pointer; border: none; font-weight: bold; width: auto; transition: 0.2s; }
+        input, textarea, select { background: var(--input-bg); border: 1px solid var(--input-border); color: var(--text); padding: 12px; border-radius: 6px; margin: 5px 0; outline: none; width: 100%; box-sizing: border-box; }
+        button { background: var(--primary); color: #fff; cursor: pointer; border: none; font-weight: bold; width: auto; transition: 0.2s; padding: 12px; border-radius: 6px; margin: 5px 0; }
         button:hover { filter: brightness(1.1); }
         .btn-danger { background: var(--danger); }
         .btn-small { padding: 4px 8px; font-size: 0.8em; width: auto; display: inline-block; margin: 0; }
         .row { display: flex; gap: 5px; }
-        .header { background: #252525; padding: 10px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #333; }
-        .ava { width: 32px; height: 32px; border-radius: 50%; background: #555; object-fit: cover; cursor: pointer; }
+        .header { background: var(--panel-2); padding: 10px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border); }
+        .ava { width: 32px; height: 32px; border-radius: 50%; background: var(--ava-bg); object-fit: cover; cursor: pointer; }
         .msgs-area { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
         
-        .msg { padding: 8px 12px; border-radius: 8px; background: #333; max-width: 85%; word-break: break-word; position: relative; }
-        .msg.my { align-self: flex-end; background: #3f4769; }
-        .msg.sys { align-self: center; background: #2c3e50; border: 1px solid var(--primary); max-width: 95%; font-size: 0.9em; }
+        .msg { padding: 8px 12px; border-radius: 8px; background: var(--panel-3); max-width: 85%; word-break: break-word; position: relative; }
+        .msg.my { align-self: flex-end; background: var(--msg-my); }
+        .msg.sys { align-self: center; background: var(--msg-sys); border: 1px solid var(--primary); max-width: 95%; font-size: 0.9em; }
         .msg img { max-width: 100%; border-radius: 5px; margin-top: 5px; display: block; }
         
         .reply-ctx { border-left: 3px solid var(--accent); background: rgba(0,0,0,0.2); padding: 4px; font-size: 0.8em; margin-bottom: 4px; border-radius: 4px; opacity: 0.8; cursor: pointer; }
-        .reply-bar { display: none; background: #222; padding: 5px 10px; border-top: 1px solid var(--accent); font-size: 0.8em; align-items: center; justify-content: space-between; }
+        .reply-bar { display: none; background: var(--panel-4); padding: 5px 10px; border-top: 1px solid var(--accent); font-size: 0.8em; align-items: center; justify-content: space-between; }
         
-        .pinned-bar { background: #2c3e50; padding: 8px 15px; border-bottom: 1px solid var(--accent); font-size: 0.9em; display: none; align-items: center; justify-content: space-between; }
-        #pua-grid { display: none; grid-template-columns: repeat(6, 1fr); gap: 4px; background: #111; padding: 8px; max-height: 200px; overflow-y: auto; border-top: 1px solid #333; }
-        .pua-key { height: 40px; background: #222; display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 4px; font-size: 1.2em; }
+        .pinned-bar { background: var(--msg-sys); padding: 8px 15px; border-bottom: 1px solid var(--accent); font-size: 0.9em; display: none; align-items: center; justify-content: space-between; }
+        #pua-grid { display: none; grid-template-columns: repeat(6, 1fr); gap: 4px; background: var(--pua-grid); padding: 8px; max-height: 200px; overflow-y: auto; border-top: 1px solid var(--border); }
+        .pua-key { height: 40px; background: var(--panel-4); display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 4px; font-size: 1.2em; }
         
         .msg-tools { display: flex; gap: 5px; margin-top: 4px; opacity: 0.5; font-size: 0.7em; }
         .msg:hover .msg-tools { opacity: 1; }
         
-        .user-card { background: #252525; padding: 10px; border-radius: 8px; margin-bottom: 5px; display: flex; align-items: center; gap: 10px; cursor: pointer; }
+        .user-card { background: var(--panel-2); padding: 10px; border-radius: 8px; margin-bottom: 5px; display: flex; align-items: center; gap: 10px; cursor: pointer; }
         .badge-admin { background: var(--accent); color: black; padding: 2px 5px; border-radius: 4px; font-size: 0.7em; font-weight: bold; }
 
         /* Вкладки в лобби */
-        .tabs { display: flex; border-bottom: 1px solid #333; }
-        .tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; background: #1e1e1e; }
-        .tab.active-tab { background: #333; border-bottom: 2px solid var(--primary); font-weight: bold; }
+        .tabs { display: flex; border-bottom: 1px solid var(--border); }
+        .tab { flex: 1; padding: 10px; text-align: center; cursor: pointer; background: var(--panel); }
+        .tab.active-tab { background: var(--panel-3); border-bottom: 2px solid var(--primary); font-weight: bold; }
         .list-section { display: none; flex: 1; padding: 10px; overflow-y: auto; }
         .list-section.active-list { display: block; }
 
@@ -56,7 +57,7 @@
         <h1 style="text-align:center; color: var(--primary)">VOY v4.0</h1>
         <input id="au-u" placeholder="Логин">
         <input id="au-p" type="password" placeholder="Пароль">
-        <div class="row"><button style="flex:1" onclick="auth('login')">ВОЙТИ</button><button style="flex:1; background:#444" onclick="auth('register')">РЕГИСТРАЦИЯ</button></div>
+        <div class="row"><button style="flex:1" onclick="auth('login')">ВОЙТИ</button><button style="flex:1; background:var(--button-secondary); color: var(--text)" onclick="auth('register')">РЕГИСТРАЦИЯ</button></div>
     </div>
 
     <div id="scr-shop" class="screen">
@@ -68,7 +69,7 @@
             </div>
             <textarea id="item-desc" placeholder="Описание (опционально)" style="height:60px"></textarea>
             <div style="display:flex; gap:8px; margin-top:8px;"><button onclick="createItem()">Создать товар</button><button onclick="socket.emit('list_items')" class="btn-small">Обновить</button></div>
-            <hr style="border-color:#333; margin:12px 0">
+            <hr style="border-color:var(--border); margin:12px 0">
             <div id="shop-list"></div>
         </div>
     </div>
@@ -86,7 +87,7 @@
             <button class="btn-small" onclick="socket.emit('refresh_lists')">↻</button>
         </div>
         
-        <div style="padding:10px; background:#222; border-bottom:1px solid #333">
+        <div style="padding:10px; background:var(--panel-4); border-bottom:1px solid var(--border)">
             <div class="row">
                 <input id="search-in" placeholder="Поиск людей..." style="margin:0">
                 <button onclick="searchUsers()" style="width:auto">🔍</button>
@@ -102,7 +103,7 @@
         <div id="list-rooms" class="list-section active-list"></div>
         <div id="list-dms" class="list-section"></div>
         
-        <div style="padding:10px; border-top:1px solid #333">
+        <div style="padding:10px; border-top:1px solid var(--border)">
             <input id="new-room-title" placeholder="Название комнаты">
             <div class="row">
                 <input id="new-room-pass" type="password" placeholder="Пароль (опц)" style="flex:1">
@@ -124,7 +125,7 @@
         </div>
 
         <div id="pua-grid"></div>
-        <div style="padding:10px; background:#252525; display:flex; align-items:center; gap:8px">
+        <div style="padding:10px; background:var(--panel-2); display:flex; align-items:center; gap:8px">
             <label style="font-size:1.5em; cursor:pointer">📎<input type="file" id="f-upl" hidden onchange="sendFile()"></label>
             <button onclick="togglePUA()" style="width:auto">⌨</button>
             <input id="m-in" placeholder="Сообщение... (!факт, !запрет, !админ) или упомяни Нек для помощи" style="margin:0">
@@ -135,10 +136,17 @@
     <div id="scr-profile" class="screen">
         <div class="header"><button onclick="show('scr-lobby')">←</button><b>Мой Профиль</b></div>
         <div style="padding:20px; overflow-y:auto; text-align:center">
-            <img id="p-ava-view" style="width:100px; height:100px; border-radius:50%; background:#333; object-fit:cover">
+            <img id="p-ava-view" style="width:100px; height:100px; border-radius:50%; background:var(--panel-3); object-fit:cover">
             <input type="file" id="p-ava-file" hidden onchange="previewAva()">
             <button onclick="document.getElementById('p-ava-file').click()">Сменить аватарку</button>
             <textarea id="p-bio" placeholder="О себе..."></textarea>
+            <div style="margin-top:8px; text-align:left">
+                <div style="font-size:0.85em; opacity:0.8; margin-bottom:4px;">Тема</div>
+                <select id="theme-select" onchange="onThemeChange()">
+                    <option value="dark">Темная</option>
+                    <option value="light">Светлая</option>
+                </select>
+            </div>
             <input type="file" id="p-font-upl" accept=".ttf,.otf"><button onclick="uploadFont()" style="background:#27ae60">Загрузить шрифт</button>
             <button onclick="saveProfile()" style="margin-top:20px; width:100%">Сохранить</button>
             <button onclick="logout()" class="btn-danger" style="width:100%">Выйти</button>
@@ -148,14 +156,14 @@
     <div id="scr-other" class="screen">
         <div class="header"><button onclick="show('scr-lobby')">←</button><b>Пользователь</b></div>
         <div style="padding:20px; text-align:center">
-            <img id="oth-ava" style="width:100px; height:100px; border-radius:50%; background:#333; object-fit:cover">
+            <img id="oth-ava" style="width:100px; height:100px; border-radius:50%; background:var(--panel-3); object-fit:cover">
             <h2 id="oth-nick">User</h2>
             <button onclick="startDM()" style="background:var(--primary); margin-bottom:15px;">✉️ НАПИСАТЬ СООБЩЕНИЕ</button>
             
-            <div id="oth-bio" style="background:#333; padding:10px; border-radius:8px; margin:10px 0; white-space: pre-wrap;"></div>
-            <div id="oth-font-info" style="color:#777"></div>
+            <div id="oth-bio" style="background:var(--panel-3); padding:10px; border-radius:8px; margin:10px 0; white-space: pre-wrap;"></div>
+            <div id="oth-font-info" style="color:var(--muted)"></div>
             
-            <div id="admin-controls" style="display:none; margin-top:20px; border-top:1px solid #444; padding-top:10px;">
+            <div id="admin-controls" style="display:none; margin-top:20px; border-top:1px solid var(--border-strong); padding-top:10px;">
                 <h3 style="color:var(--danger)">Admin Zone</h3>
                 <button onclick="banCurrentViewedUser()" class="btn-danger">ЗАБАНИТЬ ПОЛЬЗОВАТЕЛЯ</button>
             </div>
@@ -170,7 +178,7 @@
                 Приложение выдаст тебе PUA‑код (U+Exxx), который ты потом используешь в редакторе шрифтов, а готовый шрифт загружаешь в профиль.
             </p>
             <div class="row" style="margin-top:10px;">
-                <input id="neo-img" type="file" accept="image/*" style="flex:1; background:#111;">
+                <input id="neo-img" type="file" accept="image/*" style="flex:1; background:var(--panel-4);">
             </div>
             <input id="neo-label" placeholder="Название буквы (опц.)" style="margin-top:8px;">
             <button onclick="addNeoLetter()" style="width:100%; margin-top:8px;">+ Добавить букву из картинки</button>
@@ -181,7 +189,7 @@
     <div id="scr-clans" class="screen">
         <div class="header"><button onclick="show('scr-lobby')">←</button><b>Кланы</b></div>
         <div style="padding:15px; display:flex; flex-direction:column; gap:15px; overflow-y:auto;">
-            <div id="clan-self-box" style="background:#222; padding:10px; border-radius:8px;">
+            <div id="clan-self-box" style="background:var(--panel-4); padding:10px; border-radius:8px;">
                 <div id="clan-self-empty">
                     <b>Вы не состоите в клане.</b>
                     <p style="font-size:0.85em; opacity:0.8;">Создайте свой клан или вступите в существующий.</p>
@@ -201,15 +209,27 @@
                             </div>
                     </div>
                     <div id="clan-self-members" style="margin-top:8px; font-size:0.85em; opacity:0.9;"></div>
+                    <div id="clan-requests-box" style="margin-top:10px; display:none;">
+                        <div style="font-size:0.9em; opacity:0.9; margin-bottom:6px;"><b>Заявки на вступление</b></div>
+                        <div id="clan-requests-list"></div>
+                    </div>
                 </div>
             </div>
 
-            <div style="background:#222; padding:10px; border-radius:8px;">
+            <div style="background:var(--panel-4); padding:10px; border-radius:8px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                     <b>Список кланов</b>
                     <button class="btn-small" onclick="socket.emit('get_clans')">Обновить</button>
                 </div>
                 <div id="clan-list"></div>
+            </div>
+
+            <div style="background:var(--panel-4); padding:10px; border-radius:8px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                    <b>Топ-лист кланов</b>
+                    <button class="btn-small" onclick="loadClanLeaderboard()">Обновить</button>
+                </div>
+                <div id="clan-leaderboard"></div>
             </div>
         </div>
     </div>
@@ -222,6 +242,7 @@
     let neoStorageKey = null;
     let clansList = [];
     let myClan = null;
+    let clanRequests = [];
 
     // --- Helpers ---
     function registerUserFont(username, fontPath) {
@@ -234,7 +255,28 @@
         document.head.appendChild(style);
     }
     const toBase64 = f => new Promise((res, rej) => { const r = new FileReader(); r.readAsDataURL(f); r.onload = () => res(r.result); r.onerror = e => rej(e); });
-    function show(id) { document.querySelectorAll('.screen').forEach(s => s.classList.remove('active')); document.getElementById(id).classList.add('active'); }
+    function show(id) { 
+        document.querySelectorAll('.screen').forEach(s => s.classList.remove('active')); 
+        const screen = document.getElementById(id);
+        if(screen) screen.classList.add('active');
+        if(id === 'scr-clans') {
+            socket.emit('get_clans');
+            loadClanLeaderboard();
+            loadClanRequests();
+        }
+    }
+
+    function applyTheme(theme) {
+        const t = theme === 'light' ? 'light' : 'dark';
+        document.body.setAttribute('data-theme', t);
+        localStorage.setItem('voy_theme', t);
+        const sel = document.getElementById('theme-select');
+        if(sel) sel.value = t;
+    }
+    function onThemeChange() {
+        const sel = document.getElementById('theme-select');
+        if(sel) applyTheme(sel.value);
+    }
 
     // --- Auth ---
     function auth(type) {
@@ -278,7 +320,7 @@
         const l = document.getElementById('list-rooms'); l.innerHTML = '';
         Object.values(rooms).forEach(r => {
             const d = document.createElement('div');
-            d.style = "padding:12px; margin-bottom:5px; background:#333; border-radius:6px; position:relative";
+            d.style = "padding:12px; margin-bottom:5px; background:var(--panel-3); border-radius:6px; position:relative";
             let delBtn = (me && (me.username === r.owner || me.isAdmin)) ? `<button class="btn-danger btn-small" style="float:right; margin-left:10px" onclick="deleteRoom('${r.id}', event)">🗑</button>` : '';
             d.innerHTML = `<div><b>${r.mode === 'channel' ? '📢' : '#'} ${r.title}</b> ${r.hasPass ? '🔒' : ''} ${delBtn}</div>
                            <div style="font-size:0.8em; opacity:0.6">Создатель: ${r.owner}</div>`;
@@ -294,7 +336,7 @@
     socket.on('update_dms', dms => {
         const l = document.getElementById('list-dms'); l.innerHTML = '';
         const list = Object.values(dms);
-        if(list.length === 0) l.innerHTML = '<div style="color:#777; text-align:center; padding:20px">Нет личных сообщений</div>';
+        if(list.length === 0) l.innerHTML = '<div style="color:var(--muted); text-align:center; padding:20px">Нет личных сообщений</div>';
         list.forEach(r => {
             const other = r.participants.find(u => u !== me.username) || me.username;
             const d = document.createElement('div');
@@ -316,6 +358,7 @@
         if(!myClan) {
             emptyBox.style.display = 'block';
             infoBox.style.display = 'none';
+            renderClanRequests();
             return;
         }
         emptyBox.style.display = 'none';
@@ -327,6 +370,48 @@
         membersEl.innerHTML = members.length 
             ? `Участники: ${members.join(', ')}`
             : 'Участников пока нет.';
+        renderClanRequests();
+    }
+
+    function renderClanRequests() {
+        const box = document.getElementById('clan-requests-box');
+        const listEl = document.getElementById('clan-requests-list');
+        if(!box || !listEl) return;
+        listEl.innerHTML = '';
+        if(!myClan || !clanRequests || clanRequests.length === 0) {
+            box.style.display = 'none';
+            return;
+        }
+        box.style.display = 'block';
+        clanRequests.forEach(r => {
+            const row = document.createElement('div');
+            row.style = 'padding:8px; background:var(--panel-3); border-radius:6px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; gap:8px;';
+            const left = document.createElement('div');
+            const name = document.createElement('b');
+            name.innerText = r.user || 'Unknown';
+            const meta = document.createElement('div');
+            meta.style = 'font-size:0.8em; opacity:0.7;';
+            meta.innerText = r.time ? new Date(r.time).toLocaleString() : '';
+            left.appendChild(name);
+            left.appendChild(meta);
+
+            const actions = document.createElement('div');
+            actions.style = 'display:flex; gap:6px;';
+            const ok = document.createElement('button');
+            ok.className = 'btn-small';
+            ok.innerText = 'Одобрить';
+            ok.onclick = () => approveClanJoin(r.user);
+            const no = document.createElement('button');
+            no.className = 'btn-small btn-danger';
+            no.innerText = 'Отклонить';
+            no.onclick = () => rejectClanJoin(r.user);
+            actions.appendChild(ok);
+            actions.appendChild(no);
+
+            row.appendChild(left);
+            row.appendChild(actions);
+            listEl.appendChild(row);
+        });
     }
 
     function renderClansList() {
@@ -334,19 +419,20 @@
         if(!box) return;
         box.innerHTML = '';
         if(!clansList || !clansList.length) {
-            box.innerHTML = '<div style="color:#777; text-align:center; padding:8px;">Кланов пока нет.</div>';
+            box.innerHTML = '<div style="color:var(--muted); text-align:center; padding:8px;">Кланов пока нет.</div>';
             return;
         }
         clansList.forEach(c => {
             const d = document.createElement('div');
-            d.style = 'padding:8px 10px; border-radius:6px; background:#333; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; gap:6px;';
+            d.style = 'padding:8px 10px; border-radius:6px; background:var(--panel-3); margin-bottom:6px; display:flex; justify-content:space-between; align-items:center; gap:6px;';
             const tagPart = c.tag ? ` [${c.tag}]` : '';
+            const canRequest = !myClan;
             d.innerHTML = `
                 <div>
                     <div><b>${c.name}${tagPart}</b></div>
                     <div style="font-size:0.8em; opacity:0.7;">Участников: ${c.membersCount}</div>
                 </div>
-                <button class="btn-small" onclick="joinClan('${c.id}')">Вступить</button>
+                ${canRequest ? `<button class="btn-small" onclick="requestJoinClan('${c.id}')">Подать заявку</button>` : '<button class="btn-small" disabled>Недоступно</button>'}
             `;
             box.appendChild(d);
         });
@@ -362,9 +448,21 @@
         socket.emit('create_clan', { name, tag });
     }
 
-    function joinClan(id) {
+    function requestJoinClan(id) {
         if(!id) return;
-        socket.emit('join_clan', id);
+        socket.emit('request_join_clan', id);
+    }
+
+    function loadClanRequests() {
+        socket.emit('get_clan_requests');
+    }
+    function approveClanJoin(username) {
+        if(!myClan || !username) return;
+        socket.emit('approve_join_clan', { clanId: myClan.id, username });
+    }
+    function rejectClanJoin(username) {
+        if(!myClan || !username) return;
+        socket.emit('reject_join_clan', { clanId: myClan.id, username });
     }
 
     function leaveClan() {
@@ -374,6 +472,27 @@
     socket.on('clan_self', data => {
         myClan = data;
         renderMyClan();
+        renderClansList();
+        loadClanRequests();
+    });
+
+    socket.on('clan_requests', list => {
+        clanRequests = list || [];
+        renderClanRequests();
+    });
+
+    socket.on('clan_request_ok', () => {
+        alert('Заявка отправлена. Дождитесь доверенности от участника клана.');
+    });
+
+    socket.on('clan_requests_update', () => {
+        loadClanRequests();
+    });
+
+    socket.on('clan_refresh', () => {
+        if(me) socket.emit('get_clans');
+        loadClanRequests();
+        loadClanLeaderboard();
     });
 
     socket.on('clans_list', list => {
@@ -384,13 +503,12 @@
     // Clan leaderboard
     function loadClanLeaderboard() { socket.emit('get_clan_leaderboard'); }
     socket.on('clan_leaderboard', list => {
-        // Ensure a leaderboard section exists
-        let el = document.getElementById('clan-leaderboard');
-        if(!el) {
-            el = document.createElement('div'); el.id = 'clan-leaderboard';
-            const parent = document.querySelector('#scr-clans > div'); if(parent) parent.appendChild(el);
-        }
-        el.innerHTML = '<h3 style="margin-top:10px">Топ кланов</h3>' + (list.length ? list.map((c, i) => `\n<div style="padding:8px; background:#333; border-radius:6px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;"><div><b>${i+1}. ${c.name}${c.tag?(' ['+c.tag+']') : ''}</b><div style="font-size:0.85em; opacity:0.8">Участников: ${c.membersCount} • Всего ъмънов: ${c.totalBalance}</div></div><div><button class=\"btn-small\" onclick=\"peekClanPrompt('${c.id}')\">Подглядеть (780)</button></div></div>`).join('') : '<div style="color:#777; padding:8px">Пока пусто</div>');
+        const el = document.getElementById('clan-leaderboard');
+        if(!el) return;
+        const rows = Array.isArray(list) ? list : [];
+        el.innerHTML = rows.length 
+            ? rows.map((c, i) => `\n<div style="padding:8px; background:var(--panel-3); border-radius:6px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;"><div><b>${i+1}. ${c.name}${c.tag?(' ['+c.tag+']') : ''}</b><div style="font-size:0.85em; opacity:0.8">Участников: ${c.membersCount} • Всего ъмънов: ${c.totalBalance}</div></div><div><button class=\"btn-small\" onclick=\"peekClanPrompt('${c.id}')\">Подглядеть (780)</button></div></div>`).join('')
+            : '<div style="color:var(--muted); padding:8px">Пока пусто</div>';
     });
 
     function openMyClanChat() {
@@ -427,7 +545,7 @@
     socket.on('items_list', items => {
         const box = document.getElementById('shop-list'); box.innerHTML = '';
         (items||[]).forEach(it => {
-            const d = document.createElement('div'); d.style = 'padding:10px; background:#333; margin-bottom:8px; border-radius:6px;';
+            const d = document.createElement('div'); d.style = 'padding:10px; background:var(--panel-3); margin-bottom:8px; border-radius:6px;';
             d.innerHTML = `<div style="display:flex; justify-content:space-between; align-items:center;"><div><b>${it.title}</b><div style="font-size:0.85em; opacity:0.8">${it.description||''}</div></div><div style="text-align:right"><div style="font-weight:bold">${it.price} Ъмън</div><button onclick="buyItem('${it.id}')">Купить</button></div></div>`;
             box.appendChild(d);
         });
@@ -574,11 +692,11 @@
         const c = document.getElementById('search-res'); c.innerHTML = '';
         res.forEach(u => {
             const d = document.createElement('div'); d.className = 'user-card';
-            d.innerHTML = `<img src="${u.avatar||''}" style="width:24px;height:24px;border-radius:50%;background:#555"> <b>${u.username}</b>`;
+            d.innerHTML = `<img src="${u.avatar||''}" style="width:24px;height:24px;border-radius:50%;background:var(--ava-bg)"> <b>${u.username}</b>`;
             d.onclick = () => viewProfile(u.username);
             c.appendChild(d);
         });
-        if(res.length===0) c.innerHTML='<div style="padding:5px;color:#777">Пусто</div>';
+        if(res.length===0) c.innerHTML='<div style="padding:5px;color:var(--muted)">Пусто</div>';
     });
 
     function viewProfile(name) {
@@ -709,17 +827,17 @@
         if(!cont) return;
         cont.innerHTML = '';
         if(!neoLetters.length) {
-            cont.innerHTML = '<div style="color:#777; text-align:center; padding:10px;">Нет добавленных букв. Загрузите картинку и нажмите «Добавить букву».</div>';
+            cont.innerHTML = '<div style="color:var(--muted); text-align:center; padding:10px;">Нет добавленных букв. Загрузите картинку и нажмите «Добавить букву».</div>';
             return;
         }
         neoLetters.forEach((item, idx) => {
             const d = document.createElement('div');
-            d.style = 'display:flex; align-items:center; justify-content:space-between; background:#333; padding:8px 10px; border-radius:6px; margin-bottom:6px; gap:10px;';
+            d.style = 'display:flex; align-items:center; justify-content:space-between; background:var(--panel-3); padding:8px 10px; border-radius:6px; margin-bottom:6px; gap:10px;';
             const label = item.label ? item.label : 'Без названия';
             const hex = (item.code || (0xE000 + idx)).toString(16).toUpperCase();
             d.innerHTML = `
                 <div style="display:flex; align-items:center; gap:10px;">
-                    ${item.img ? `<img src="${item.img}" style="width:40px;height:40px;border-radius:4px;object-fit:contain;background:#222;">` : ''}
+                    ${item.img ? `<img src="${item.img}" style="width:40px;height:40px;border-radius:4px;object-fit:contain;background:var(--panel-4);">` : ''}
                     <div>
                         <div><b>${label}</b></div>
                         <div style="font-size:0.8em; opacity:0.7;">PUA: U+${hex}</div>
@@ -780,6 +898,7 @@
     }
 
     window.onload = () => {
+        applyTheme(localStorage.getItem('voy_theme') || 'dark');
         const u = localStorage.getItem('voy_u'), p = localStorage.getItem('voy_p');
         if(u && p) { document.getElementById('au-u').value = u; document.getElementById('au-p').value = p; auth('login'); }
     }
