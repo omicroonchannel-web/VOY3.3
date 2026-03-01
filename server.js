@@ -25,6 +25,7 @@ init('items.json', []);
 init('transactions.json', []);
 
 const BOT_NAME = "Нек";
+const BOT_VOICE = "\u0413\u041e\u041b\u041e\u0421";
 const HF_API_KEY = "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";
 const HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"; // Модель для генерации текста
 const REWARD_SECRET = process.env.REWARD_SECRET || 'local_dev_reward_secret';
@@ -284,7 +285,7 @@ io.on('connection', (socket) => {
         };
         write('rooms.json', r); 
         io.to('lobby').emit('update_rooms', getPublicRooms(r));
-        if(isClosed) socket.emit('alert', 'Group token: ' + token);
+        if(isClosed) socket.emit('alert', '\u0422\u043e\u043a\u0435\u043d \u0433\u0440\u0443\u043f\u043f\u044b: ' + token);
     });
 
     socket.on('start_dm', (targetUser) => {
@@ -350,7 +351,7 @@ io.on('connection', (socket) => {
         }
 
         if(r.isClosed && !isAdmin && r.owner !== me.username && r.token && r.token !== d.token) {
-            return socket.emit('error', 'Invalid group token.');
+            return socket.emit('error', '\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u0442\u043e\u043a\u0435\u043d \u0433\u0440\u0443\u043f\u043f\u044b.');
         }
 
         if(!r.isDm && r.password && r.password !== d.password && !isAdmin) return socket.emit('error', 'Неверный пароль!');
@@ -383,11 +384,30 @@ io.on('connection', (socket) => {
             // !????? ? ???????? ????? ???????? ?????? (?????? ????????/?????)
             const tokenCmd = ['!token', '!\u0442\u043e\u043a\u0435\u043d'].includes(d.text.trim().toLowerCase());
             if(tokenCmd) {
-                if(!r.isClosed) return socket.emit('error', 'Not a closed group.');
-                if(r.owner !== me.username && !isAdmin) return socket.emit('error', 'Only owner can view token.');
-                socket.emit('alert', 'Group token: ' + (r.token || 'N/A'));
+                if(!r.isClosed) return socket.emit('error', '\u042d\u0442\u043e \u043d\u0435 \u0437\u0430\u043a\u0440\u044b\u0442\u0430\u044f \u0433\u0440\u0443\u043f\u043f\u0430.');
+                if(r.owner !== me.username && !isAdmin) return socket.emit('error', '\u0422\u043e\u043b\u044c\u043a\u043e \u0432\u043b\u0430\u0434\u0435\u043b\u0435\u0446 \u043c\u043e\u0436\u0435\u0442 \u0443\u0437\u043d\u0430\u0442\u044c \u0442\u043e\u043a\u0435\u043d.');
+                socket.emit('alert', '\u0422\u043e\u043a\u0435\u043d \u0433\u0440\u0443\u043f\u043f\u044b: ' + (r.token || 'N/A'));
                 return;
             }
+            // !\u0433\u043e\u043b\u043e\u0441(\u0442\u0435\u043a\u0441\u0442) ? \u0440\u0430\u0441\u0441\u044b\u043b\u043a\u0430 \u0432\u0441\u0435\u043c \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f\u043c (\u0442\u043e\u043b\u044c\u043a\u043e \u041e\u043c\u0438\u043a\u0440\u0443\u043d/\u0430\u0434\u043c\u0438\u043d)
+            const voiceMatch = d.text.match(/^!\u0433\u043e\u043b\u043e\u0441\((.+)\)$/i);
+            if(voiceMatch) {
+                if(!isAdmin && me.username !== ADMIN_LOGIN) return socket.emit('error', '\u0422\u043e\u043b\u044c\u043a\u043e \u041e\u043c\u0438\u043a\u0440\u0443\u043d \u043c\u043e\u0436\u0435\u0442 \u0434\u0435\u043b\u0430\u0442\u044c \u0440\u0430\u0441\u0441\u044b\u043b\u043a\u0443.');
+                const text = (voiceMatch[1] || '').trim();
+                if(!text) return;
+                const allRooms = read('rooms.json');
+                for(const id in allRooms) {
+                    const room = allRooms[id];
+                    const msg = createMsg(BOT_VOICE, null, text, 'text', room);
+                    room.msgs.push(msg);
+                    if(room.msgs.length > 200) room.msgs.shift();
+                    io.to(room.id).emit('new_msg', msg);
+                }
+                write('rooms.json', allRooms);
+                return;
+            }
+
+
             // !запрет(слово)
             const banMatch = d.text.match(/^!запрет\((.+)\)$/);
             if(banMatch) {
@@ -447,7 +467,7 @@ io.on('connection', (socket) => {
 
         // Стандартная отправка
         if (r.mode === 'channel' && r.owner !== me.username) {
-            return socket.emit('error', 'Only channel author can post messages.');
+            return socket.emit('error', '\u0412 \u043a\u0430\u043d\u0430\u043b\u0435 \u043f\u0438\u0441\u0430\u0442\u044c \u043c\u043e\u0436\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u0430\u0432\u0442\u043e\u0440 \u043a\u0430\u043d\u0430\u043b\u0430.');
         }
 
         const m = createMsg(me.username, me.font, d.text, d.type, r, d.file, d.replyTo);
