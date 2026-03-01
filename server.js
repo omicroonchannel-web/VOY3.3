@@ -55,10 +55,17 @@ app.post('/reward', (req, res) => {
 const ADMIN_LOGIN = "Омикрун";
 const ADMIN_PASS = "omicroon1326";
 
+const generateToken = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+
 // Утилита для фильтрации комнат: публичные отдельно, ЛС отдельно
 const getPublicRooms = (rooms) => {
     const pub = {};
-    for(let k in rooms) if(!rooms[k].isDm) pub[k] = rooms[k];
+    for(let k in rooms) {
+        if(rooms[k].isDm) continue;
+        const room = { ...rooms[k] };
+        if(room.token) delete room.token;
+        pub[k] = room;
+    }
     return pub;
 };
 
@@ -267,14 +274,17 @@ io.on('connection', (socket) => {
     socket.on('create_room', (d) => {
         if(!me) return;
         const r = read('rooms.json'), id = 'room_' + Date.now();
+        const isClosed = d.mode === 'group';
+        const token = isClosed ? generateToken() : null;
         r[id] = { 
             id, title: d.title, owner: me.username, 
             password: d.password || null, hasPass: !!d.password, 
             mode: d.mode, msgs: [], pinned: null, bannedWords: [],
-            isDm: false, admins: [] 
+            isDm: false, admins: [], isClosed, token
         };
         write('rooms.json', r); 
         io.to('lobby').emit('update_rooms', getPublicRooms(r));
+        if(isClosed) socket.emit('alert', 'Group token: ' + token);
     });
 
     socket.on('start_dm', (targetUser) => {
@@ -339,10 +349,14 @@ io.on('connection', (socket) => {
             return socket.emit('error', 'Доступ к чату клана доступен только участникам.');
         }
 
+        if(r.isClosed && !isAdmin && r.owner !== me.username && r.token && r.token !== d.token) {
+            return socket.emit('error', 'Invalid group token.');
+        }
+
         if(!r.isDm && r.password && r.password !== d.password && !isAdmin) return socket.emit('error', 'Неверный пароль!');
         
         socket.join(d.id);
-        const data = {...r}; delete data.password;
+        const data = {...r}; delete data.password; if(data.token) delete data.token;
         // Для ЛС меняем заголовок на имя собеседника
         if(r.isDm) {
             const other = r.participants.find(u => u !== me.username) || me.username;
@@ -366,6 +380,14 @@ io.on('connection', (socket) => {
         
         // 2. Обработка команд (начинаются с !)
         if(d.type === 'text' && d.text.startsWith('!')) {
+            // !????? ? ???????? ????? ???????? ?????? (?????? ????????/?????)
+            const tokenCmd = ['!token', '!\u0442\u043e\u043a\u0435\u043d'].includes(d.text.trim().toLowerCase());
+            if(tokenCmd) {
+                if(!r.isClosed) return socket.emit('error', 'Not a closed group.');
+                if(r.owner !== me.username && !isAdmin) return socket.emit('error', 'Only owner can view token.');
+                socket.emit('alert', 'Group token: ' + (r.token || 'N/A'));
+                return;
+            }
             // !запрет(слово)
             const banMatch = d.text.match(/^!запрет\((.+)\)$/);
             if(banMatch) {
@@ -424,7 +446,9 @@ io.on('connection', (socket) => {
         }
 
         // Стандартная отправка
-        if (r.mode === 'channel' && r.owner !== me.username && !isAdmin && !(r.admins || []).includes(me.username)) return;
+        if (r.mode === 'channel' && r.owner !== me.username) {
+            return socket.emit('error', 'Only channel author can post messages.');
+        }
 
         const m = createMsg(me.username, me.font, d.text, d.type, r, d.file, d.replyTo);
         

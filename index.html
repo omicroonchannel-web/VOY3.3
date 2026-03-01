@@ -93,15 +93,23 @@
                 <button onclick="searchUsers()" style="width:auto">🔍</button>
             </div>
             <div id="search-res" style="max-height:100px; overflow-y:auto; margin-top:5px;"></div>
+            <div class="row" style="margin-top:6px">
+                <input id="search-ch-in" placeholder="Channel search..." style="margin:0">
+                <button onclick="searchChannels()" style="width:auto">&#128269;</button>
+            </div>
+            <div id="search-ch-res" style="max-height:120px; overflow-y:auto; margin-top:5px;"></div>
+
         </div>
 
         <div class="tabs">
-            <div class="tab active-tab" onclick="switchTab('rooms')">Комнаты</div>
-            <div class="tab" onclick="switchTab('dms')">ЛС</div>
+            <div class="tab active-tab" data-tab="rooms" onclick="switchTab('rooms')">Комнаты</div>
+            <div class="tab" data-tab="dms" onclick="switchTab('dms')">ЛС</div>
+            <div class="tab" data-tab="favorites" onclick="switchTab('favorites')">ИЗБРАННОЕ</div>
         </div>
 
         <div id="list-rooms" class="list-section active-list"></div>
         <div id="list-dms" class="list-section"></div>
+        <div id="list-favorites" class="list-section"></div>
         
         <div style="padding:10px; border-top:1px solid var(--border)">
             <input id="new-room-title" placeholder="Название комнаты">
@@ -239,6 +247,9 @@
     const socket = io();
     let me = null, curRoom = null, replyTo = null, viewingUser = null;
     let neoLetters = [];
+    let favoriteRooms = {};
+    let latestRooms = {};
+    let latestDms = {};
     let neoStorageKey = null;
     let clansList = [];
     let myClan = null;
@@ -278,6 +289,102 @@
         if(sel) applyTheme(sel.value);
     }
 
+
+    function getFavoritesKey() {
+        return me ? `voy_favorites_${me.username}` : 'voy_favorites_guest';
+    }
+
+    function loadFavorites() {
+        try {
+            const raw = localStorage.getItem(getFavoritesKey());
+            const parsed = raw ? JSON.parse(raw) : {};
+            favoriteRooms = (parsed && typeof parsed === 'object') ? parsed : {};
+        } catch (e) {
+            favoriteRooms = {};
+        }
+    }
+
+    function saveFavorites() {
+        localStorage.setItem(getFavoritesKey(), JSON.stringify(favoriteRooms));
+    }
+
+    function isFavoriteRoom(roomId) {
+        return !!favoriteRooms[roomId];
+    }
+
+    function toggleFavoriteRoom(entry, e) {
+        if(e) e.stopPropagation();
+        if(!entry || !entry.id) return;
+        if(isFavoriteRoom(entry.id)) {
+            delete favoriteRooms[entry.id];
+        } else {
+            favoriteRooms[entry.id] = {
+                id: entry.id,
+                source: entry.source || 'rooms',
+                title: entry.title || 'Untitled',
+                mode: entry.mode || 'chat',
+                hasPass: !!entry.hasPass
+            };
+        }
+        saveFavorites();
+        renderFavorites();
+    }
+
+    function favoriteBtn(roomId, payload) {
+        const active = isFavoriteRoom(roomId);
+        const bg = active ? '#1f8b4d' : '#27ae60';
+        const title = active ? 'Remove from favorites' : 'Add to favorites';
+        return `<button class="btn-small" title="${title}" style="float:right; margin-left:6px; background:${bg}" onclick='toggleFavoriteRoom(${JSON.stringify(payload)}, event)'>&#128220;</button>`;
+    }
+
+    function openFavoriteRoom(entry) {
+        if(!entry || !entry.id) return;
+        const pass = entry.hasPass ? prompt('Enter room password:') : null;
+        curRoom = entry.id;
+        socket.emit('join_room', { id: entry.id, password: pass });
+    }
+
+    function renderFavorites() {
+        const list = document.getElementById('list-favorites');
+        if(!list) return;
+        const items = [];
+        for(const id in favoriteRooms) {
+            if(latestRooms[id]) {
+                const r = latestRooms[id];
+                favoriteRooms[id] = { id: r.id, source: 'rooms', title: r.title, mode: r.mode, hasPass: !!r.hasPass };
+                items.push(favoriteRooms[id]);
+            } else if(latestDms[id]) {
+                const dm = latestDms[id];
+                const other = dm.participants.find(u => u !== me.username) || me.username;
+                favoriteRooms[id] = { id: dm.id, source: 'dms', title: other, mode: 'dm', hasPass: false };
+                items.push(favoriteRooms[id]);
+            }
+        }
+
+        if(!items.length) {
+            list.innerHTML = '<div style="color:var(--muted); text-align:center; padding:20px">No favorite chats yet</div>';
+            saveFavorites();
+            return;
+        }
+
+        list.innerHTML = '';
+        items.forEach(item => {
+            const d = document.createElement('div');
+            d.style = 'padding:12px; margin-bottom:5px; background:var(--panel-3); border-radius:6px; position:relative;';
+            const icon = item.mode === 'channel' ? '&#128226;' : (item.mode === 'dm' ? '&#128172;' : '#');
+            d.innerHTML = `<div><b>${icon} ${item.title}</b>${favoriteBtn(item.id, item)}</div><div style="font-size:0.8em; opacity:0.7">${item.source === 'dms' ? 'Direct messages' : 'Room'}</div>`;
+            d.onclick = (e) => {
+                if(e.target.tagName === 'BUTTON') return;
+                openFavoriteRoom(item);
+            };
+            list.appendChild(d);
+        });
+        saveFavorites();
+    }
+
+
+    // --- Auth ---
+
     // --- Auth ---
     function auth(type) {
         const u = document.getElementById('au-u').value, p = document.getElementById('au-p').value;
@@ -296,6 +403,8 @@
         if(me.font) registerUserFont(me.username, me.font);
 
         neoStorageKey = 'voy_neo_' + me.username;
+        loadFavorites();
+        renderFavorites();
         loadNeoLetters();
         renderNeoLetters();
         socket.emit('get_clans');
@@ -305,49 +414,62 @@
 
     // --- Lobby & Tabs ---
     function switchTab(tab) {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active-tab'));
+        document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active-tab', t.dataset.tab === tab));
         document.querySelectorAll('.list-section').forEach(l => l.classList.remove('active-list'));
         if(tab === 'rooms') {
-            document.querySelectorAll('.tab')[0].classList.add('active-tab');
             document.getElementById('list-rooms').classList.add('active-list');
-        } else {
-            document.querySelectorAll('.tab')[1].classList.add('active-tab');
+        } else if(tab === 'dms') {
             document.getElementById('list-dms').classList.add('active-list');
+        } else {
+            renderFavorites();
+            document.getElementById('list-favorites').classList.add('active-list');
         }
     }
 
     socket.on('update_rooms', rooms => {
+        latestRooms = rooms || {};
         const l = document.getElementById('list-rooms'); l.innerHTML = '';
-        Object.values(rooms).forEach(r => {
+        Object.values(latestRooms).forEach(r => {
             const d = document.createElement('div');
             d.style = "padding:12px; margin-bottom:5px; background:var(--panel-3); border-radius:6px; position:relative";
-            let delBtn = (me && (me.username === r.owner || me.isAdmin)) ? `<button class="btn-danger btn-small" style="float:right; margin-left:10px" onclick="deleteRoom('${r.id}', event)">🗑</button>` : '';
-            d.innerHTML = `<div><b>${r.mode === 'channel' ? '📢' : '#'} ${r.title}</b> ${r.hasPass ? '🔒' : ''} ${delBtn}</div>
-                           <div style="font-size:0.8em; opacity:0.6">Создатель: ${r.owner}</div>`;
+            let delBtn = (me && (me.username === r.owner || me.isAdmin)) ? `<button class="btn-danger btn-small" style="float:right; margin-left:10px" onclick="deleteRoom('${r.id}', event)">&#128465;</button>` : '';
+            const favBtn = favoriteBtn(r.id, { id: r.id, source: 'rooms', title: r.title, mode: r.mode, hasPass: !!r.hasPass });
+            const icon = r.mode === 'channel' ? '&#128226;' : (r.mode === 'group' ? '&#128274;' : '#');
+            const lockMark = (r.hasPass || r.isClosed) ? ' &#128274;' : '';
+            d.innerHTML = `<div><b>${icon} ${r.title}</b>${lockMark} ${favBtn} ${delBtn}</div>
+                           <div style="font-size:0.8em; opacity:0.6">Owner: ${r.owner}</div>`;
             d.onclick = (e) => {
                 if(e.target.tagName === 'BUTTON') return;
-                let pass = r.hasPass ? prompt("Введите пароль от комнаты:") : null;
-                curRoom = r.id; socket.emit('join_room', { id: r.id, password: pass });
+                let pass = r.hasPass ? prompt("Enter room password:") : null;
+                let token = r.isClosed ? prompt("Enter group token:") : null;
+                curRoom = r.id; socket.emit('join_room', { id: r.id, password: pass, token: token });
             };
             l.appendChild(d);
         });
+        renderFavorites();
     });
 
-    socket.on('update_dms', dms => {
+socket.on('update_dms', dms => {
+        latestDms = dms || {};
         const l = document.getElementById('list-dms'); l.innerHTML = '';
-        const list = Object.values(dms);
-        if(list.length === 0) l.innerHTML = '<div style="color:var(--muted); text-align:center; padding:20px">Нет личных сообщений</div>';
+        const list = Object.values(latestDms);
+        if(list.length === 0) l.innerHTML = '<div style="color:var(--muted); text-align:center; padding:20px">No direct messages</div>';
         list.forEach(r => {
             const other = r.participants.find(u => u !== me.username) || me.username;
             const d = document.createElement('div');
             d.className = 'user-card';
-            d.innerHTML = `<b>💬 ${other}</b>`;
-            d.onclick = () => { curRoom = r.id; socket.emit('join_room', { id: r.id }); };
+            const favBtn = favoriteBtn(r.id, { id: r.id, source: 'dms', title: other, mode: 'dm', hasPass: false });
+            d.innerHTML = `<b>&#128172; ${other}</b>${favBtn}`;
+            d.onclick = (e) => {
+                if(e.target.tagName === 'BUTTON') return;
+                curRoom = r.id; socket.emit('join_room', { id: r.id });
+            };
             l.appendChild(d);
         });
+        renderFavorites();
     });
 
-    // --- Clans ---
+    // --- Clans ---    // --- Clans ---
     function renderMyClan() {
         const emptyBox = document.getElementById('clan-self-empty');
         const infoBox = document.getElementById('clan-self-info');
@@ -658,7 +780,7 @@
         const roomAdmins = m.roomAdmins || [];
         const canManage = (me.username === m.roomOwner || roomAdmins.includes(me.username) || me.isAdmin) && !isSys;
         if(canManage) {
-            adminTools = `<button class="btn-small btn-danger" onclick="delMsg('${m.id}')">Del</button> 
+            adminTools = `<button class="btn-small btn-danger" onclick="delMsg('${m.id}')">&#128465;</button> 
                           <button class="btn-small" onclick="pinMsg('${m.id}')">Pin</button>`;
         }
         
@@ -688,6 +810,30 @@
 
     // --- Search & Profiles ---
     function searchUsers() { const q = document.getElementById('search-in').value; if(q) socket.emit('search_users', q); }
+    function searchChannels() {
+        const q = (document.getElementById('search-ch-in').value || '').toLowerCase().trim();
+        const box = document.getElementById('search-ch-res');
+        if(!box) return;
+        box.innerHTML = '';
+        const rooms = Object.values(latestRooms || {}).filter(r => r.mode === 'channel');
+        const filtered = q ? rooms.filter(r => (r.title || '').toLowerCase().includes(q)) : rooms;
+        if(filtered.length === 0) {
+            box.innerHTML = '<div style="color:var(--muted); padding:5px">No channels</div>';
+            return;
+        }
+        filtered.forEach(r => {
+            const d = document.createElement('div');
+            d.className = 'user-card';
+            const lock = r.hasPass ? ' &#128274;' : '';
+            d.innerHTML = `<b>&#128226; ${r.title}</b>${lock}`;
+            d.onclick = () => {
+                let pass = r.hasPass ? prompt("Enter room password:") : null;
+                curRoom = r.id; socket.emit('join_room', { id: r.id, password: pass });
+            };
+            box.appendChild(d);
+        });
+    }
+
     socket.on('search_results', res => {
         const c = document.getElementById('search-res'); c.innerHTML = '';
         res.forEach(u => {
