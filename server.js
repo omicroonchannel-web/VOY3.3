@@ -354,7 +354,11 @@ io.on('connection', (socket) => {
             return socket.emit('error', '\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u0442\u043e\u043a\u0435\u043d \u0433\u0440\u0443\u043f\u043f\u044b.');
         }
 
-        if(!r.isDm && r.password && r.password !== d.password && !isAdmin) return socket.emit('error', 'Неверный пароль!');
+        if(!r.isDm && r.password && !isAdmin && r.owner !== me.username) {
+            if(!r.isDm && r.password && !isAdmin) {
+                if(!d.password || String(r.password) !== String(d.password)) return socket.emit('error', '???????? ??????!');
+            }
+        }
         
         socket.join(d.id);
         const data = {...r}; delete data.password; if(data.token) delete data.token;
