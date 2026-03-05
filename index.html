@@ -115,7 +115,7 @@
             <input id="new-room-title" placeholder="Название комнаты">
             <div class="row">
                 <input id="new-room-pass" type="password" placeholder="Пароль (опц)" style="flex:1">
-                <select id="new-room-mode" style="width:100px"><option value="chat">Чат</option><option value="channel">Канал</option></select>
+                <select id="new-room-mode" style="width:100px"><option value="chat">Чат</option><option value="channel">Канал</option><option value="closed">Закрытая</option></select>
             </div>
             <button onclick="createRoom()" style="width:100%">+ Создать комнату</button>
         </div>
@@ -340,8 +340,11 @@
     function openFavoriteRoom(entry) {
         if(!entry || !entry.id) return;
         const pass = entry.hasPass ? prompt('\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0430\u0440\u043e\u043b\u044c \u043e\u0442 \u043a\u043e\u043c\u043d\u0430\u0442\u044b:') : null;
+        const room = latestRooms[entry.id];
+        const isOwnerOrAdmin = room && me && (me.username === room.owner || me.isAdmin);
+        const token = (entry.mode === 'closed' && !isOwnerOrAdmin) ? prompt('Введите токен группы:') : null;
         curRoom = entry.id;
-        socket.emit('join_room', { id: entry.id, password: pass });
+        socket.emit('join_room', { id: entry.id, password: pass, token });
     }
 
     function renderFavorites() {
@@ -371,7 +374,7 @@
         items.forEach(item => {
             const d = document.createElement('div');
             d.style = 'padding:12px; margin-bottom:5px; background:var(--panel-3); border-radius:6px; position:relative;';
-            const icon = item.mode === 'channel' ? '&#128226;' : (item.mode === 'dm' ? '&#128172;' : '#');
+            const icon = item.mode === 'channel' ? '&#128226;' : (item.mode === 'closed' ? '&#128274;' : (item.mode === 'dm' ? '&#128172;' : '#'));
             d.innerHTML = `<div><b>${icon} ${item.title}</b>${favoriteBtn(item.id, item)}</div><div style="font-size:0.8em; opacity:0.7">${item.source === 'dms' ? '\u041b\u0438\u0447\u043d\u044b\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f' : '\u041a\u043e\u043c\u043d\u0430\u0442\u0430'}</div>`;
             d.onclick = (e) => {
                 if(e.target.tagName === 'BUTTON') return;
@@ -434,14 +437,15 @@
             d.style = "padding:12px; margin-bottom:5px; background:var(--panel-3); border-radius:6px; position:relative";
             let delBtn = (me && (me.username === r.owner || me.isAdmin)) ? `<button class="btn-danger btn-small" style="float:right; margin-left:10px" onclick="deleteRoom('${r.id}', event)">&#128465;</button>` : '';
             const favBtn = favoriteBtn(r.id, { id: r.id, source: 'rooms', title: r.title, mode: r.mode, hasPass: !!r.hasPass });
-            const icon = r.mode === 'channel' ? '&#128226;' : (r.mode === 'group' ? '&#128274;' : '#');
+            const icon = r.mode === 'channel' ? '&#128226;' : (r.mode === 'closed' ? '&#128274;' : '#');
             const lockMark = (r.hasPass || r.isClosed) ? ' &#128274;' : '';
             d.innerHTML = `<div><b>${icon} ${r.title}</b>${lockMark} ${favBtn} ${delBtn}</div>
                            <div style="font-size:0.8em; opacity:0.6">Создатель: ${r.owner}</div>`;
             d.onclick = (e) => {
                 if(e.target.tagName === 'BUTTON') return;
+                const isOwnerOrAdmin = me && (me.username === r.owner || me.isAdmin);
                 let pass = r.hasPass ? prompt('\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0430\u0440\u043e\u043b\u044c \u043e\u0442 \u043a\u043e\u043c\u043d\u0430\u0442\u044b:') : null;
-                let token = r.isClosed ? prompt('\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0442\u043e\u043a\u0435\u043d \u0433\u0440\u0443\u043f\u043f\u044b:') : null;
+                let token = (r.isClosed && !isOwnerOrAdmin) ? prompt('Введите токен группы:') : null;
                 curRoom = r.id; socket.emit('join_room', { id: r.id, password: pass, token: token });
             };
             l.appendChild(d);
@@ -719,6 +723,17 @@ socket.on('update_dms', dms => {
         socket.emit('join_room', { id: roomId });
     });
 
+    socket.on('token_resolved', ({ id, token }) => {
+        curRoom = id;
+        socket.emit('join_room', { id, token });
+    });
+
+    function joinByToken(token) {
+        const cleanToken = String(token || '').trim();
+        if(!cleanToken) return;
+        socket.emit('join_by_token', cleanToken);
+    }
+
     function startReply(id, txt, user) {
         replyTo = { id, txt, user };
         document.getElementById('reply-ui').style.display = 'flex';
@@ -745,6 +760,10 @@ socket.on('update_dms', dms => {
     socket.on('new_msg', addMsg);
     socket.on('msg_deleted', id => { const e = document.getElementById(`m-${id}`); if(e) e.remove(); });
     socket.on('update_pin', msg => updatePinUI(msg));
+
+    function linkifyTokenText(text) {
+        return text.replace(/v([a-z0-9]{8,32})r/gi, (match, token) => `<a href="#" class="token-link" data-token="${token}">${match}</a>`);
+    }
 
     function addMsg(m) {
         if(m.userFont) registerUserFont(m.user, m.userFont);

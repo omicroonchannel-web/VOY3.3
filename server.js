@@ -59,15 +59,30 @@ const ADMIN_PASS = "omicroon1326";
 const generateToken = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
 
 // Утилита для фильтрации комнат: публичные отдельно, ЛС отдельно
-const getPublicRooms = (rooms) => {
+const getPublicRooms = (rooms, username, isAdmin) => {
     const pub = {};
     for(let k in rooms) {
-        if(rooms[k].isDm) continue;
-        const room = { ...rooms[k] };
-        if(room.token) delete room.token;
-        pub[k] = room;
+        const room = rooms[k];
+        if(room.isDm) continue;
+        if(room.isClosed && !(isAdmin || room.owner === username)) continue;
+        const roomView = { ...room };
+        if(roomView.token) delete roomView.token;
+        pub[k] = roomView;
     }
     return pub;
+};
+
+const emitRoomsToSocket = (socket, rooms) => {
+    const username = socket?.data?.username;
+    const admin = !!socket?.data?.isAdmin;
+    if(!username) return;
+    socket.emit('update_rooms', getPublicRooms(rooms, username, admin));
+};
+
+const emitRoomsToAll = (rooms) => {
+    io.sockets.sockets.forEach((s) => {
+        emitRoomsToSocket(s, rooms);
+    });
 };
 
 const getUserDMs = (rooms, username) => {
@@ -262,8 +277,10 @@ io.on('connection', (socket) => {
         }
 
         socket.emit('auth_ok', { ...me, isAdmin });
+        socket.data.username = me.username;
+        socket.data.isAdmin = isAdmin;
         const rooms = read('rooms.json');
-        socket.emit('update_rooms', getPublicRooms(rooms));
+        emitRoomsToSocket(socket, rooms);
         socket.emit('update_dms', getUserDMs(rooms, me.username));
         socket.emit('clan_self', getSelfClan(me.username));
         socket.emit('clans_list', getClansSummary());
@@ -275,7 +292,7 @@ io.on('connection', (socket) => {
     socket.on('create_room', (d) => {
         if(!me) return;
         const r = read('rooms.json'), id = 'room_' + Date.now();
-        const isClosed = d.mode === 'group';
+        const isClosed = d.mode === 'closed';
         const token = isClosed ? generateToken() : null;
         r[id] = { 
             id, title: d.title, owner: me.username, 
@@ -284,8 +301,8 @@ io.on('connection', (socket) => {
             isDm: false, admins: [], isClosed, token
         };
         write('rooms.json', r); 
-        io.to('lobby').emit('update_rooms', getPublicRooms(r));
-        if(isClosed) socket.emit('alert', '\u0422\u043e\u043a\u0435\u043d \u0433\u0440\u0443\u043f\u043f\u044b: ' + token);
+        emitRoomsToAll(r);
+        if(isClosed) socket.emit('alert', 'Токен группы: v' + token + 'r');
     });
 
     socket.on('start_dm', (targetUser) => {
@@ -320,7 +337,7 @@ io.on('connection', (socket) => {
         if(!me) return;
         const rooms = read('rooms.json');
         socket.emit('update_dms', getUserDMs(rooms, me.username));
-        socket.emit('update_rooms', getPublicRooms(rooms));
+        emitRoomsToSocket(socket, rooms);
     });
 
     socket.on('delete_room', (roomId) => {
@@ -330,7 +347,7 @@ io.on('connection', (socket) => {
         if (r && (r.owner === me.username || isAdmin)) {
             delete rooms[roomId];
             write('rooms.json', rooms);
-            io.to('lobby').emit('update_rooms', getPublicRooms(rooms));
+            emitRoomsToAll(rooms);
             io.to(roomId).emit('room_closed'); 
         }
     });
@@ -370,6 +387,16 @@ io.on('connection', (socket) => {
         socket.emit('room_history', data);
     });
 
+    socket.on('join_by_token', (rawToken) => {
+        if(!me) return;
+        const token = String(rawToken || '').trim();
+        if(!token) return socket.emit('error', 'Неверный токен.');
+        const rooms = read('rooms.json');
+        const room = Object.values(rooms).find(x => x.isClosed && x.token === token);
+        if(!room) return socket.emit('error', 'Закрытая комната по токену не найдена.');
+        socket.emit('token_resolved', { id: room.id, token });
+    });
+
     // --- Messaging & Commands ---
 
     socket.on('send_msg', (d) => {
@@ -390,7 +417,7 @@ io.on('connection', (socket) => {
             if(tokenCmd) {
                 if(!r.isClosed) return socket.emit('error', '\u042d\u0442\u043e \u043d\u0435 \u0437\u0430\u043a\u0440\u044b\u0442\u0430\u044f \u0433\u0440\u0443\u043f\u043f\u0430.');
                 if(r.owner !== me.username && !isAdmin) return socket.emit('error', '\u0422\u043e\u043b\u044c\u043a\u043e \u0432\u043b\u0430\u0434\u0435\u043b\u0435\u0446 \u043c\u043e\u0436\u0435\u0442 \u0443\u0437\u043d\u0430\u0442\u044c \u0442\u043e\u043a\u0435\u043d.');
-                socket.emit('alert', '\u0422\u043e\u043a\u0435\u043d \u0433\u0440\u0443\u043f\u043f\u044b: ' + (r.token || 'N/A'));
+                socket.emit('alert', 'Токен группы: v' + (r.token || 'N/A') + 'r');
                 return;
             }
             // !\u0433\u043e\u043b\u043e\u0441(\u0442\u0435\u043a\u0441\u0442) ? \u0440\u0430\u0441\u0441\u044b\u043b\u043a\u0430 \u0432\u0441\u0435\u043c \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f\u043c (\u0442\u043e\u043b\u044c\u043a\u043e \u041e\u043c\u0438\u043a\u0440\u0443\u043d/\u0430\u0434\u043c\u0438\u043d)
