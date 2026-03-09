@@ -63,7 +63,7 @@ app.get(/^\/v([a-z0-9]+)s$/i, (req, res) => {
     return res.type('html').send(renderTeaPage(site));
 });
 
-app.get('/ormolar/index.json', (req, res) => {
+app.get('/pages/index.json', (req, res) => {
     ensureOrmolarInfra();
     const q = String(req.query.q || '').toLowerCase().trim();
     const sites = Object.values(read('sites.json'));
@@ -78,9 +78,12 @@ app.get('/ormolar/index.json', (req, res) => {
     res.json({ ok: true, count: out.length, sites: out });
 });
 
-app.get('/ormolar', (req, res) => res.redirect('/ormolar/index'));
+app.get('/pages', (req, res) => res.redirect('/pages/index'));
+app.get('/ormolar', (req, res) => res.redirect('/pages/index'));
+app.get('/ormolar/index', (req, res) => res.redirect('/pages/index'));
+app.get('/ormolar/index.json', (req, res) => res.redirect('/pages/index.json'));
 
-app.get('/ormolar/index', (req, res) => {
+app.get('/pages/index', (req, res) => {
     ensureOrmolarInfra();
     const q = String(req.query.q || '').toLowerCase().trim();
     const sites = Object.values(read('sites.json'));

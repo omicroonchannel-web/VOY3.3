@@ -956,7 +956,7 @@ socket.on('update_dms', dms => {
 
     function loadPages() {
         socket.emit('list_sites');
-        fetch('/ormolar/index.json')
+        fetch('/pages/index.json')
             .then(r => r.ok ? r.json() : null)
             .then(d => {
                 if(!d || !Array.isArray(d.sites)) return;
