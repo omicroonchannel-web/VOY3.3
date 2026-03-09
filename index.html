@@ -105,11 +105,22 @@
             <div class="tab active-tab" data-tab="rooms" onclick="switchTab('rooms')">Комнаты</div>
             <div class="tab" data-tab="dms" onclick="switchTab('dms')">ЛС</div>
             <div class="tab" data-tab="favorites" onclick="switchTab('favorites')">ИЗБРАННОЕ</div>
+            <div class="tab" data-tab="console" onclick="switchTab('console')">Console</div>
         </div>
 
         <div id="list-rooms" class="list-section active-list"></div>
         <div id="list-dms" class="list-section"></div>
         <div id="list-favorites" class="list-section"></div>
+        <div id="list-console" class="list-section">
+            <div style="padding:10px">
+                <div style="font-size:0.85em; opacity:0.8; margin-bottom:6px">Commands: <code>!zkv(token)</code>, <code>!create(type "title")</code></div>
+                <textarea id="console-out" readonly style="height:180px; margin-bottom:6px; font-family:Consolas,monospace"></textarea>
+                <div class="row">
+                    <input id="console-in" placeholder="Command..." style="margin:0" onkeydown="if(event.key==='Enter'){event.preventDefault();runConsoleCommand();}">
+                    <button onclick="runConsoleCommand()" style="width:auto">Run</button>
+                </div>
+            </div>
+        </div>
         
         <div style="padding:10px; border-top:1px solid var(--border)">
             <input id="new-room-title" placeholder="Название комнаты">
@@ -254,6 +265,7 @@
     let clansList = [];
     let myClan = null;
     let clanRequests = [];
+    let pendingConsoleFavorite = null;
 
     // --- Helpers ---
     function registerUserFont(username, fontPath) {
@@ -308,6 +320,13 @@
         localStorage.setItem(getFavoritesKey(), JSON.stringify(favoriteRooms));
     }
 
+    function consoleLog(text) {
+        const out = document.getElementById('console-out');
+        if(!out) return;
+        out.value += (out.value ? '\n' : '') + text;
+        out.scrollTop = out.scrollHeight;
+    }
+
     function isFavoriteRoom(roomId) {
         return !!favoriteRooms[roomId];
     }
@@ -341,7 +360,7 @@
         if(!entry || !entry.id) return;
         const pass = entry.hasPass ? prompt('\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0430\u0440\u043e\u043b\u044c \u043e\u0442 \u043a\u043e\u043c\u043d\u0430\u0442\u044b:') : null;
         const room = latestRooms[entry.id];
-        const isOwnerOrAdmin = room && me && (me.username === room.owner || me.isAdmin);
+        const isOwnerOrAdmin = me && (me.isAdmin || (room && (me.username === room.owner || (room.admins || []).includes(me.username))) || (!room && (me.username === entry.owner || (entry.admins || []).includes(me.username))));
         const token = (entry.mode === 'closed' && !isOwnerOrAdmin) ? prompt('Введите токен группы:') : null;
         curRoom = entry.id;
         socket.emit('join_room', { id: entry.id, password: pass, token });
@@ -354,12 +373,14 @@
         for(const id in favoriteRooms) {
             if(latestRooms[id]) {
                 const r = latestRooms[id];
-                favoriteRooms[id] = { id: r.id, source: 'rooms', title: r.title, mode: r.mode, hasPass: !!r.hasPass };
+                favoriteRooms[id] = { id: r.id, source: 'rooms', title: r.title, mode: r.mode, hasPass: !!r.hasPass, owner: r.owner, admins: r.admins || [] };
                 items.push(favoriteRooms[id]);
             } else if(latestDms[id]) {
                 const dm = latestDms[id];
                 const other = dm.participants.find(u => u !== me.username) || me.username;
                 favoriteRooms[id] = { id: dm.id, source: 'dms', title: other, mode: 'dm', hasPass: false };
+                items.push(favoriteRooms[id]);
+            } else if(favoriteRooms[id] && favoriteRooms[id].source === 'rooms') {
                 items.push(favoriteRooms[id]);
             }
         }
@@ -423,6 +444,8 @@
             document.getElementById('list-rooms').classList.add('active-list');
         } else if(tab === 'dms') {
             document.getElementById('list-dms').classList.add('active-list');
+        } else if(tab === 'console') {
+            document.getElementById('list-console').classList.add('active-list');
         } else {
             renderFavorites();
             document.getElementById('list-favorites').classList.add('active-list');
@@ -436,14 +459,14 @@
             const d = document.createElement('div');
             d.style = "padding:12px; margin-bottom:5px; background:var(--panel-3); border-radius:6px; position:relative";
             let delBtn = (me && (me.username === r.owner || me.isAdmin)) ? `<button class="btn-danger btn-small" style="float:right; margin-left:10px" onclick="deleteRoom('${r.id}', event)">&#128465;</button>` : '';
-            const favBtn = favoriteBtn(r.id, { id: r.id, source: 'rooms', title: r.title, mode: r.mode, hasPass: !!r.hasPass });
+            const favBtn = favoriteBtn(r.id, { id: r.id, source: 'rooms', title: r.title, mode: r.mode, hasPass: !!r.hasPass, owner: r.owner, admins: r.admins || [] });
             const icon = r.mode === 'channel' ? '&#128226;' : (r.mode === 'closed' ? '&#128274;' : '#');
             const lockMark = (r.hasPass || r.isClosed) ? ' &#128274;' : '';
             d.innerHTML = `<div><b>${icon} ${r.title}</b>${lockMark} ${favBtn} ${delBtn}</div>
                            <div style="font-size:0.8em; opacity:0.6">Создатель: ${r.owner}</div>`;
             d.onclick = (e) => {
                 if(e.target.tagName === 'BUTTON') return;
-                const isOwnerOrAdmin = me && (me.username === r.owner || me.isAdmin);
+                const isOwnerOrAdmin = me && (me.username === r.owner || me.isAdmin || (r.admins || []).includes(me.username));
                 let pass = r.hasPass ? prompt('\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0430\u0440\u043e\u043b\u044c \u043e\u0442 \u043a\u043e\u043c\u043d\u0430\u0442\u044b:') : null;
                 let token = (r.isClosed && !isOwnerOrAdmin) ? prompt('Введите токен группы:') : null;
                 curRoom = r.id; socket.emit('join_room', { id: r.id, password: pass, token: token });
@@ -709,6 +732,21 @@ socket.on('update_dms', dms => {
         document.getElementById('msgs-cont').innerHTML = '';
         cancelReply();
         r.msgs.forEach(addMsg);
+        if(pendingConsoleFavorite && pendingConsoleFavorite.id === r.id) {
+            favoriteRooms[r.id] = {
+                id: r.id,
+                source: 'rooms',
+                title: r.title,
+                mode: 'closed',
+                hasPass: !!r.hasPass,
+                owner: r.owner || '',
+                admins: r.admins || []
+            };
+            saveFavorites();
+            renderFavorites();
+            pendingConsoleFavorite = null;
+            consoleLog('???????? ??????? Run ? Run.');
+        }
         updatePinUI(r.pinned);
         show('scr-chat');
     });
@@ -725,11 +763,15 @@ socket.on('update_dms', dms => {
 
     socket.on('token_resolved', ({ id, token }) => {
         curRoom = id;
+        if(pendingConsoleFavorite) pendingConsoleFavorite.id = id;
         socket.emit('join_room', { id, token });
     });
 
     function joinByToken(token) {
-        const cleanToken = String(token || '').trim();
+        const raw = String(token || '').trim().toLowerCase();
+        if(!raw) return;
+        const match = raw.match(/v([a-z0-9]+)r/);
+        const cleanToken = match ? match[1] : raw.replace(/[^a-z0-9]/g, '');
         if(!cleanToken) return;
         socket.emit('join_by_token', cleanToken);
     }
@@ -784,11 +826,12 @@ socket.on('update_dms', dms => {
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
             const safeTextWithBreaks = safeText.replace(/\n/g, '<br>');
+            const safeTextWithTokens = linkifyTokenText(safeTextWithBreaks);
             if(hasPUA) {
                 // Для PUA делаем текст крупнее и не мешаем глобальный шрифт
-                content = `<span class="u-font-${m.user}" style="font-size:1.3em; line-height:1.3;">${safeTextWithBreaks}</span>`;
+                content = `<span class="u-font-${m.user}" style="font-size:1.3em; line-height:1.3;">${safeTextWithTokens}</span>`;
             } else {
-                content = `<span style="font-family: var(--global-font);">${safeTextWithBreaks}</span>`;
+                content = `<span style="font-family: var(--global-font);">${safeTextWithTokens}</span>`;
             }
         }
 
@@ -813,6 +856,12 @@ socket.on('update_dms', dms => {
                        ${content}
                        ${!isSys ? `<div class="msg-tools"><button class="btn-small" onclick="startReply('${m.id}', '${m.type==='text'?m.text:'[File]'}', '${m.user}')">↩</button>${adminTools}</div>` : ''}`;
         
+        d.querySelectorAll('.token-link').forEach(a => {
+            a.addEventListener('click', (e) => {
+                e.preventDefault();
+                joinByToken(a.dataset.token);
+            });
+        });
         c.appendChild(d); c.scrollTop = c.scrollHeight;
     }
 
@@ -829,6 +878,43 @@ socket.on('update_dms', dms => {
     }
 
     // --- Search & Profiles ---
+    function runConsoleCommand() {
+        const input = document.getElementById('console-in');
+        if(!input) return;
+        const raw = (input.value || '').trim();
+        if(!raw) return;
+        input.value = '';
+        consoleLog('> ' + raw);
+
+        const joinMatch = raw.match(/^!\u0437\u043a\u0432\((.+)\)$/i) || raw.match(/^!zkv\((.+)\)$/i);
+        if(joinMatch) {
+            pendingConsoleFavorite = { mode: 'closed' };
+            joinByToken(joinMatch[1]);
+            return;
+        }
+
+        const createMatch = raw.match(/^!\u0441\u043e\u0437\u0434\u0430\u0442\u044c\((.+)\)$/i) || raw.match(/^!create\((.+)\)$/i);
+        if(createMatch) {
+            const body = createMatch[1].trim();
+            const m = body.match(/^([^\s]+)\s+"([^"]+)"$/) || body.match(/^([^\s]+)\s+(.+)$/);
+            if(!m) return consoleLog('Format: !create(type "title")');
+            const typeRaw = (m[1] || '').toLowerCase();
+            const title = (m[2] || '').trim();
+            const typeMap = {
+                'chat': 'chat', '\u0447\u0430\u0442': 'chat',
+                'channel': 'channel', '\u043a\u0430\u043d\u0430\u043b': 'channel',
+                'closed': 'closed', '\u0437\u0430\u043a\u0440\u044b\u0442\u0430\u044f': 'closed', '\u0437\u043a': 'closed'
+            };
+            const mode = typeMap[typeRaw];
+            if(!mode) return consoleLog('Unknown type. Use chat/channel/closed.');
+            if(!title) return consoleLog('Empty title.');
+            socket.emit('create_room', { title, mode, password: '' });
+            consoleLog(`Created room: [${mode}] ${title}`);
+            return;
+        }
+
+        consoleLog('Unknown command.');
+    }
     function searchUsers() { const q = document.getElementById('search-in').value; if(q) socket.emit('search_users', q); }
     function searchChannels() {
         const q = (document.getElementById('search-ch-in').value || '').toLowerCase().trim();

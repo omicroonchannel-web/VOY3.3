@@ -57,6 +57,12 @@ const ADMIN_LOGIN = "Омикрун";
 const ADMIN_PASS = "omicroon1326";
 
 const generateToken = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+const normalizeRoomToken = (raw) => {
+    const s = String(raw || '').trim().toLowerCase();
+    if(!s) return '';
+    const m = s.match(/v([a-z0-9]+)r/);
+    return m ? m[1] : s.replace(/[^a-z0-9]/g, '');
+};
 
 // Утилита для фильтрации комнат: публичные отдельно, ЛС отдельно
 const getPublicRooms = (rooms, username, isAdmin) => {
@@ -64,7 +70,8 @@ const getPublicRooms = (rooms, username, isAdmin) => {
     for(let k in rooms) {
         const room = rooms[k];
         if(room.isDm) continue;
-        if(room.isClosed && !(isAdmin || room.owner === username)) continue;
+        const roomAdmins = room.admins || [];
+        if(room.isClosed && !(isAdmin || room.owner === username || roomAdmins.includes(username))) continue;
         const roomView = { ...room };
         if(roomView.token) delete roomView.token;
         pub[k] = roomView;
@@ -367,7 +374,8 @@ io.on('connection', (socket) => {
             return socket.emit('error', 'Доступ к чату клана доступен только участникам.');
         }
 
-        if(r.isClosed && !isAdmin && r.owner !== me.username && r.token && r.token !== d.token) {
+        const roomAdmins = r.admins || [];
+        if(r.isClosed && !isAdmin && r.owner !== me.username && !roomAdmins.includes(me.username) && r.token && r.token !== normalizeRoomToken(d.token)) {
             return socket.emit('error', '\u041d\u0435\u0432\u0435\u0440\u043d\u044b\u0439 \u0442\u043e\u043a\u0435\u043d \u0433\u0440\u0443\u043f\u043f\u044b.');
         }
 
@@ -389,7 +397,7 @@ io.on('connection', (socket) => {
 
     socket.on('join_by_token', (rawToken) => {
         if(!me) return;
-        const token = String(rawToken || '').trim();
+        const token = normalizeRoomToken(rawToken);
         if(!token) return socket.emit('error', 'Неверный токен.');
         const rooms = read('rooms.json');
         const room = Object.values(rooms).find(x => x.isClosed && x.token === token);
