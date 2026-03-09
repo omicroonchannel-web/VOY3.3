@@ -62,6 +62,38 @@ const ensureOrmolarInfra = () => {
 };
 ensureOrmolarInfra();
 
+const ensureTeapgBusRoom = () => {
+    const rooms = read('rooms.json');
+    let changed = false;
+    if(!rooms[TEAPG_BUS_ROOM_ID]) {
+        rooms[TEAPG_BUS_ROOM_ID] = {
+            id: TEAPG_BUS_ROOM_ID,
+            title: TEAPG_BUS_TITLE,
+            owner: 'System',
+            password: null,
+            hasPass: false,
+            mode: 'channel',
+            msgs: [],
+            pinned: null,
+            bannedWords: [],
+            isDm: false,
+            admins: [ADMIN_LOGIN],
+            isClosed: true,
+            token: generateToken(),
+            hidden: true
+        };
+        changed = true;
+    }
+    if(!rooms[TEAPG_BUS_ROOM_ID].hidden) {
+        rooms[TEAPG_BUS_ROOM_ID].hidden = true;
+        changed = true;
+    }
+    if(changed) write('rooms.json', rooms);
+    return rooms[TEAPG_BUS_ROOM_ID];
+};
+ensureTeapgBusRoom();
+
+
 const BOT_NAME = "Нек";
 const BOT_VOICE = "\u0413\u041e\u041b\u041e\u0421";
 const HF_API_KEY = "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";
@@ -135,6 +167,8 @@ app.post('/reward', (req, res) => {
 
 const ADMIN_LOGIN = "Омикрун";
 const ADMIN_PASS = "omicroon1326";
+const TEAPG_BUS_ROOM_ID = 'room_teapg_handlers';
+const TEAPG_BUS_TITLE = 'TEAPG Handler Bus';
 
 const generateToken = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
 const normalizeRoomToken = (raw) => {
@@ -232,6 +266,7 @@ const getPublicRooms = (rooms, username, isAdmin) => {
     for(let k in rooms) {
         const room = rooms[k];
         if(room.isDm) continue;
+        if(room.hidden) continue;
         const roomAdmins = room.admins || [];
         if(room.isClosed && !(isAdmin || room.owner === username || roomAdmins.includes(username))) continue;
         const roomView = { ...room };
@@ -665,12 +700,63 @@ io.on('connection', (socket) => {
         socket.emit('site_deleted', { ok: true, domain, token });
     });
 
+
+    function publishTeapgPacket(pkg, author) {
+        const rooms = read('rooms.json');
+        const bus = rooms[TEAPG_BUS_ROOM_ID] || ensureTeapgBusRoom();
+        const payload = {
+            domain: String(pkg.domain || '').trim().toLowerCase(),
+            title: String(pkg.title || pkg.domain || '').trim(),
+            teaCode: String(pkg.teaCode || '').trim(),
+            renderedHtml: String(pkg.renderedHtml || ''),
+            owner: String(pkg.owner || author || ''),
+            updatedAt: pkg.updatedAt || new Date().toISOString(),
+            from: String(author || '')
+        };
+        if(!payload.domain || !payload.teaCode) return false;
+
+        const fileName = `${payload.domain.replace(/[^a-z0-9.-]/gi, '_')}.teapg`;
+        const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+        const dataUrl = `data:application/json;base64,${encoded}`;
+        const msg = createMsg('System', null, fileName, 'file', bus, dataUrl, null);
+        bus.msgs = bus.msgs || [];
+        bus.msgs.push(msg);
+        if(bus.msgs.length > 300) bus.msgs = bus.msgs.slice(-300);
+        rooms[TEAPG_BUS_ROOM_ID] = bus;
+        write('rooms.json', rooms);
+
+        io.to(TEAPG_BUS_ROOM_ID).emit('new_msg', msg);
+        io.emit('teapg_packet', payload);
+        return true;
+    }
+
+    socket.on('publish_teapg', (pkg) => {
+        if(!me) return;
+        const ok = publishTeapgPacket(pkg || {}, me.username);
+        if(!ok) return socket.emit('error', 'Invalid TEAPG payload.');
+        socket.emit('alert', 'TEAPG broadcasted.');
+    });
+
     // --- Messaging & Commands ---
 
     socket.on('send_msg', (d) => {
         if(!me) return;
         const rooms = read('rooms.json'), r = rooms[d.roomId];
         if(!r) return;
+
+        // Incoming .teapg files are auto-forwarded to the handler bus and replicated to clients.
+        if(d.type === 'file' && /\.teapg$/i.test(String(d.text || '')) && typeof d.file === 'string' && d.file.includes('base64,')) {
+            try {
+                const base64 = d.file.split('base64,')[1] || '';
+                const json = Buffer.from(base64, 'base64').toString('utf8');
+                const pkg = JSON.parse(json);
+                const ok = publishTeapgPacket(pkg || {}, me.username);
+                if(!ok) return socket.emit('error', 'Invalid .teapg payload.');
+                return socket.emit('alert', '.teapg replicated to handler clients.');
+            } catch (e) {
+                return socket.emit('error', 'Failed to parse .teapg file.');
+            }
+        }
 
         // 1. Проверка на !запрет (Banned Words)
         if(d.type === 'text') {
