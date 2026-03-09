@@ -25,6 +25,24 @@ init('items.json', []);
 init('transactions.json', []);
 init('sites.json', {});
 init('zones.json', ['orm', 'omic', 'ogh']);
+const DEFAULT_SITE_ZONES = ['ormolar', 'orm', 'omic', 'ogh'];
+
+const ensureOrmolarInfra = () => {
+    const sites = read('sites.json');
+    if(!sites || Array.isArray(sites) || typeof sites !== 'object') write('sites.json', {});
+
+    let zones = read('zones.json');
+    if(!Array.isArray(zones)) zones = [];
+    let changed = false;
+    DEFAULT_SITE_ZONES.forEach((z) => {
+        if(!zones.includes(z)) {
+            zones.push(z);
+            changed = true;
+        }
+    });
+    if(changed) write('zones.json', zones);
+};
+ensureOrmolarInfra();
 
 const BOT_NAME = "Нек";
 const BOT_VOICE = "\u0413\u041e\u041b\u041e\u0421";
@@ -37,6 +55,7 @@ app.use(express.static(__dirname));
 app.use(express.json());
 
 app.get(/^\/v([a-z0-9]+)s$/i, (req, res) => {
+    ensureOrmolarInfra();
     const token = normalizeSiteToken(req.params[0]);
     const sites = read('sites.json');
     const site = sites[token];
@@ -45,6 +64,7 @@ app.get(/^\/v([a-z0-9]+)s$/i, (req, res) => {
 });
 
 app.get('/ormolar/index.json', (req, res) => {
+    ensureOrmolarInfra();
     const q = String(req.query.q || '').toLowerCase().trim();
     const sites = Object.values(read('sites.json'));
     const filtered = q ? sites.filter(s => (s.fullDomain || '').includes(q) || (s.title || '').toLowerCase().includes(q) || (s.owner || '').toLowerCase().includes(q)) : sites;
@@ -59,6 +79,7 @@ app.get('/ormolar/index.json', (req, res) => {
 });
 
 app.get('/ormolar/index', (req, res) => {
+    ensureOrmolarInfra();
     const q = String(req.query.q || '').toLowerCase().trim();
     const sites = Object.values(read('sites.json'));
     const filtered = q ? sites.filter(s => (s.fullDomain || '').includes(q) || (s.title || '').toLowerCase().includes(q) || (s.owner || '').toLowerCase().includes(q)) : sites;
@@ -518,6 +539,7 @@ io.on('connection', (socket) => {
 
     socket.on('post_site', (payload) => {
         if(!me) return;
+        ensureOrmolarInfra();
         const domainRaw = payload?.domain;
         const teaCode = String(payload?.teaCode || '').trim();
         const parsedDomain = parseDomainInput(domainRaw);
@@ -568,6 +590,7 @@ io.on('connection', (socket) => {
             ok: true,
             token,
             path: `v${token}s`,
+            url: `/v${token}s`,
             domain: parsedDomain.fullDomain,
             index: '/ormolar/index'
         });
@@ -575,6 +598,7 @@ io.on('connection', (socket) => {
 
     socket.on('delete_site', (rawKey) => {
         if(!me) return;
+        ensureOrmolarInfra();
         if(!isAdmin && me.username !== ADMIN_LOGIN) return socket.emit('error', 'Only Omikrun can delete sites.');
         const key = String(rawKey || '').trim().toLowerCase();
         if(!key) return socket.emit('error', 'Empty key.');
