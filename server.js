@@ -78,13 +78,18 @@ app.get('/ormolar/index.json', (req, res) => {
     res.json({ ok: true, count: out.length, sites: out });
 });
 
+app.get('/ormolar', (req, res) => res.redirect('/ormolar/index'));
+
 app.get('/ormolar/index', (req, res) => {
     ensureOrmolarInfra();
     const q = String(req.query.q || '').toLowerCase().trim();
     const sites = Object.values(read('sites.json'));
     const filtered = q ? sites.filter(s => (s.fullDomain || '').includes(q) || (s.title || '').toLowerCase().includes(q) || (s.owner || '').toLowerCase().includes(q)) : sites;
-    const rows = filtered.slice(0, 500).map(s => `<li><a href="/${`v${s.token}s`}" target="_blank">${escapeHtml(s.fullDomain)}</a> ? ${escapeHtml(s.title || '')} <small>by ${escapeHtml(s.owner || '')}</small></li>`).join('');
-    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ormolar Index</title><style>body{font-family:ui-sans-serif,system-ui;background:#0f1115;color:#e7ebf0;margin:0}main{max-width:920px;margin:0 auto;padding:24px}a{color:#80b8ff}input{width:100%;padding:10px;border-radius:8px;border:1px solid #2b3240;background:#161b22;color:#e7ebf0}li{margin:10px 0}</style></head><body><main><h1>Ormolar Index</h1><form method="get"><input name="q" value="${escapeHtml(q)}" placeholder="search domain/title/owner"></form><ul>${rows || '<li>No pages</li>'}</ul></main></body></html>`);
+    const rows = filtered.slice(0, 500).map(s => {
+        const path = `v${s.token}s`;
+        return `<details style="margin:10px 0; background:#161b22; border:1px solid #2b3240; border-radius:10px; padding:10px;"><summary style="cursor:pointer"><b>${escapeHtml(s.fullDomain)}</b> ? ${escapeHtml(s.title || '')} <small>by ${escapeHtml(s.owner || '')}</small></summary><div style="margin-top:10px"><iframe src="/${path}" style="width:100%; height:360px; border:1px solid #2b3240; border-radius:8px; background:#fff"></iframe><div style="margin-top:8px"><a href="/${path}" target="_blank">Open full page</a></div></div></details>`;
+    }).join('');
+    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ormolar Index</title><style>body{font-family:ui-sans-serif,system-ui;background:#0f1115;color:#e7ebf0;margin:0}main{max-width:980px;margin:0 auto;padding:24px}a{color:#80b8ff}input{width:100%;padding:10px;border-radius:8px;border:1px solid #2b3240;background:#161b22;color:#e7ebf0}details summary::-webkit-details-marker{display:none}</style></head><body><main><h1>Ormolar Index</h1><form method="get"><input name="q" value="${escapeHtml(q)}" placeholder="search domain/title/owner"></form>${rows || '<div style="opacity:.7;margin-top:10px">No pages</div>'}</main></body></html>`);
 });
 
 
@@ -188,11 +193,16 @@ const compileTea = (tea) => {
 };
 
 const renderTeaPage = (site) => {
+    let pageHtml = String(site.html || '');
+    if(!/<[a-z][\s\S]*>/i.test(pageHtml) && site.teaCode) {
+        // Backward compatibility: re-render old entries where TEA code was stored as plain text.
+        pageHtml = compileTea(site.teaCode).html;
+    }
     const fontPrefix = (site.fonts || []).map(f => `'${String(f).replace(/'/g, "")}'`).join(', ');
     const family = fontPrefix ? `${fontPrefix}, ui-sans-serif, system-ui` : 'ui-sans-serif, system-ui';
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(site.title || site.fullDomain)}</title>
-<style>body{margin:0;background:#111;color:#eee;font-family:${family}}main{max-width:960px;margin:0 auto;padding:24px}a{color:#7cb7ff}h1,h2,h3{margin:0 0 12px}p{line-height:1.55}small{opacity:.7}</style></head><body><main><small>${escapeHtml(site.fullDomain)} ? by ${escapeHtml(site.owner)}</small>${site.html || ''}</main></body></html>`;
+<style>body{margin:0;background:#111;color:#eee;font-family:${family}}main{max-width:960px;margin:0 auto;padding:24px}a{color:#7cb7ff}h1,h2,h3{margin:0 0 12px}p{line-height:1.55}small{opacity:.7}</style></head><body><main><small>${escapeHtml(site.fullDomain)} ? by ${escapeHtml(site.owner)}</small>${pageHtml}</main></body></html>`;
 };
 
 // Утилита для фильтрации комнат: публичные отдельно, ЛС отдельно
@@ -537,6 +547,25 @@ io.on('connection', (socket) => {
     });
 
 
+    socket.on('list_sites', () => {
+        ensureOrmolarInfra();
+        if(!me) return;
+        const sites = Object.values(read('sites.json'))
+            .sort((a,b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+            .slice(0, 500)
+            .map(s => ({
+                token: s.token,
+                domain: s.fullDomain,
+                title: s.title || s.fullDomain,
+                owner: s.owner,
+                path: `v${s.token}s`,
+                url: `/v${s.token}s`,
+                renderedHtml: renderTeaPage(s),
+                updatedAt: s.updatedAt
+            }));
+        socket.emit('sites_list', sites);
+    });
+
     socket.on('post_site', (payload) => {
         if(!me) return;
         ensureOrmolarInfra();
@@ -591,8 +620,7 @@ io.on('connection', (socket) => {
             token,
             path: `v${token}s`,
             url: `/v${token}s`,
-            domain: parsedDomain.fullDomain,
-            index: '/ormolar/index'
+            domain: parsedDomain.fullDomain
         });
     });
 

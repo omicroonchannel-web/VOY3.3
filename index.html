@@ -109,12 +109,34 @@
             <div class="tab active-tab" data-tab="rooms" onclick="switchTab('rooms')">Комнаты</div>
             <div class="tab" data-tab="dms" onclick="switchTab('dms')">ЛС</div>
             <div class="tab" data-tab="favorites" onclick="switchTab('favorites')">ИЗБРАННОЕ</div>
+            <div class="tab" data-tab="pages" onclick="switchTab('pages')">Pages</div>
             <div class="tab" data-tab="console" onclick="switchTab('console')">Console</div>
         </div>
 
         <div id="list-rooms" class="list-section active-list"></div>
         <div id="list-dms" class="list-section"></div>
         <div id="list-favorites" class="list-section"></div>
+        <div id="list-pages" class="list-section">
+            <div style="padding:10px">
+                <div class="row" style="margin-bottom:6px">
+                    <input id="pages-q" placeholder="Search pages..." style="margin:0" oninput="renderPages()">
+                    <button class="btn-small" onclick="loadPages()" style="width:auto">Refresh</button>
+                </div>
+                <div id="pages-list"></div>
+                <details style="margin-top:8px; background:var(--panel-4); padding:8px; border-radius:8px;">
+                    <summary style="cursor:pointer"><b>TEA Guide</b></summary>
+                    <pre style="white-space:pre-wrap; font-family:Consolas,monospace; font-size:0.85em; margin:8px 0 0 0;">title: My Page
+font: "Segoe UI"
+h1: Hello
+h2: Subtitle
+h3: Section
+link: OpenAI|https://openai.com
+img: https://example.com/pic.jpg
+Plain text line.</pre>
+                </details>
+            </div>
+        </div>
+
         <div id="list-console" class="list-section">
             <div style="padding:10px">
                 <pre id="console-help" style="font-size:0.85em; opacity:0.9; margin:0 0 6px 0; white-space:pre-wrap; font-family:Consolas,monospace">+--------------------------------+
@@ -281,6 +303,7 @@
     let myClan = null;
     let clanRequests = [];
     let pendingConsoleFavorite = null;
+    let latestSites = [];
 
     // --- Helpers ---
     function registerUserFont(username, fontPath) {
@@ -460,6 +483,7 @@
         renderNeoLetters();
         socket.emit('get_clans');
         socket.emit('get_balance');
+        loadPages();
         show('scr-lobby');
     });
 
@@ -471,6 +495,9 @@
             document.getElementById('list-rooms').classList.add('active-list');
         } else if(tab === 'dms') {
             document.getElementById('list-dms').classList.add('active-list');
+        } else if(tab === 'pages') {
+            document.getElementById('list-pages').classList.add('active-list');
+            loadPages();
         } else if(tab === 'console') {
             document.getElementById('list-console').classList.add('active-list');
         } else {
@@ -839,6 +866,21 @@ socket.on('update_dms', dms => {
         return text.replace(/(https?:\/\/[^\s<]+)/gi, (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
     }
 
+    function linkifySiteTokenText(text) {
+        return text.replace(/v([a-z0-9]{8,32})s/gi, (match, token) => `<a href="/v${token}s" target="_blank" rel="noopener">${match}</a>`);
+    }
+
+    function normalizeRenderedHtml(raw) {
+        const html = String(raw || '');
+        if(!html) return '';
+        if(html.includes('&lt;') || html.includes('&gt;')) {
+            const t = document.createElement('textarea');
+            t.innerHTML = html;
+            return t.value;
+        }
+        return html;
+    }
+
     function addMsg(m) {
         if(m.userFont) registerUserFont(m.user, m.userFont);
         const c = document.getElementById('msgs-cont');
@@ -860,7 +902,8 @@ socket.on('update_dms', dms => {
                 .replace(/>/g, '&gt;');
             const safeTextWithBreaks = safeText.replace(/\n/g, '<br>');
             const safeTextWithUrls = linkifyUrlText(safeTextWithBreaks);
-            const safeTextWithTokens = linkifyTokenText(safeTextWithUrls);
+            const safeTextWithSiteLinks = linkifySiteTokenText(safeTextWithUrls);
+            const safeTextWithTokens = linkifyTokenText(safeTextWithSiteLinks);
             if(hasPUA) {
                 // Для PUA делаем текст крупнее и не мешаем глобальный шрифт
                 content = `<span class="u-font-${m.user}" style="font-size:1.3em; line-height:1.3;">${safeTextWithTokens}</span>`;
@@ -910,6 +953,79 @@ socket.on('update_dms', dms => {
             document.getElementById('unpin-ui').style.display = (me.username === msg.roomOwner || me.isAdmin) ? 'block' : 'none';
         } else { bar.style.display = 'none'; }
     }
+
+    function loadPages() {
+        socket.emit('list_sites');
+        fetch('/ormolar/index.json')
+            .then(r => r.ok ? r.json() : null)
+            .then(d => {
+                if(!d || !Array.isArray(d.sites)) return;
+                const mapped = d.sites.map(x => ({
+                    token: x.path ? String(x.path).replace(/^v([a-z0-9]+)s$/i, '$1') : '',
+                    domain: x.domain || '',
+                    title: x.title || x.domain || '',
+                    owner: x.owner || '',
+                    path: x.path || '',
+                    url: x.path ? ('/' + x.path) : '',
+                    renderedHtml: '',
+                    updatedAt: x.updatedAt || ''
+                }));
+                if(mapped.length) {
+                    latestSites = mapped;
+                    renderPages();
+                }
+            })
+            .catch(() => {});
+    }
+
+    function renderPages() {
+        const list = document.getElementById('pages-list');
+        if(!list) return;
+        const q = (document.getElementById('pages-q')?.value || '').trim().toLowerCase();
+        const items = (latestSites || []).filter(s => !q || (s.domain || '').toLowerCase().includes(q) || (s.title || '').toLowerCase().includes(q) || (s.owner || '').toLowerCase().includes(q));
+        list.innerHTML = '';
+        if(items.length === 0) {
+            list.innerHTML = '<div style="color:var(--muted); padding:8px">No pages found</div>';
+            return;
+        }
+        items.forEach(site => {
+            const d = document.createElement('details');
+            d.style = 'margin-bottom:8px; background:var(--panel-2); border-radius:8px; padding:8px;';
+
+            const sum = document.createElement('summary');
+            sum.style = 'cursor:pointer; list-style:none;';
+            sum.innerHTML = `<b>${site.domain}</b><div style="font-size:0.8em; opacity:0.75">${site.title || ''} ? by ${site.owner || ''}</div>`;
+
+            const wrap = document.createElement('div');
+            wrap.style = 'margin-top:8px';
+
+            const frame = document.createElement('iframe');
+            frame.style = 'width:100%; height:320px; border:1px solid var(--border); border-radius:8px; background:#fff';
+            frame.setAttribute('sandbox', 'allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox');
+            const docHtml = normalizeRenderedHtml(site.renderedHtml || '');
+            if(docHtml && /<\/?[a-z][\s\S]*>/i.test(docHtml)) {
+                const blob = new Blob([docHtml], { type: 'text/html' });
+                frame.src = URL.createObjectURL(blob);
+            } else {
+                frame.src = '/' + site.path;
+            }
+
+            const linkLine = document.createElement('div');
+            linkLine.style = 'margin-top:6px';
+            linkLine.innerHTML = `<a href="/${site.path}" target="_blank" rel="noopener">Open full page</a>`;
+
+            wrap.appendChild(frame);
+            wrap.appendChild(linkLine);
+            d.appendChild(sum);
+            d.appendChild(wrap);
+            list.appendChild(d);
+        });
+    }
+
+    socket.on('sites_list', (sites) => {
+        latestSites = sites || [];
+        renderPages();
+    });
 
     // --- Search & Profiles ---
     function runConsoleCommand() {
@@ -1131,13 +1247,13 @@ socket.on('update_dms', dms => {
         if(!d) return;
         consoleLog(`Site token: v${d.token}s`);
         consoleLog(`Site posted: ${d.domain} -> /${d.path}`);
-        consoleLog(`Index: ${d.index}`);
         addConsoleLink(`Open site: ${d.domain}`, '/' + d.path);
-        addConsoleLink('Open index', d.index);
+        loadPages();
     });
     socket.on('site_deleted', (d) => {
         if(!d) return;
         consoleLog(`Site deleted: ${d.domain} (v${d.token}s)`);
+        loadPages();
     });
 
     // Глобальное обновление шрифтов пользователей
@@ -1258,3 +1374,4 @@ socket.on('update_dms', dms => {
 </script>
 </body>
 </html>
+
