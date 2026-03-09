@@ -116,7 +116,14 @@
         <div id="list-favorites" class="list-section"></div>
         <div id="list-console" class="list-section">
             <div style="padding:10px">
-                <div style="font-size:0.85em; opacity:0.8; margin-bottom:6px">Commands: <code>!zkv(token)</code>, <code>!create(type "title")</code></div>
+                <pre id="console-help" style="font-size:0.85em; opacity:0.9; margin:0 0 6px 0; white-space:pre-wrap; font-family:Consolas,monospace">??????????????????????????????????
+? TEA CONSOLE                   ?
+??????????????????????????????????
+!zkv(token) = get closed room
+!create(type "title") = create room
+!menu = menu call
+!profile = show your profile(name, password, money, clan)
+!calculate(number action number) = calculates a mathematical expression</pre>
                 <textarea id="console-out" readonly style="height:180px; margin-bottom:6px; font-family:Consolas,monospace"></textarea>
                 <div class="row">
                     <input id="console-in" placeholder="Command..." style="margin:0" onkeydown="if(event.key==='Enter'){event.preventDefault();runConsoleCommand();}">
@@ -889,14 +896,50 @@ socket.on('update_dms', dms => {
         input.value = '';
         consoleLog('> ' + raw);
 
-        const joinMatch = raw.match(/^!\u0437\u043a\u0432\((.+)\)$/i) || raw.match(/^!zkv\((.+)\)$/i);
+        if(raw.toLowerCase() === '!menu') {
+            const help = document.getElementById('console-help');
+            if(help) consoleLog(help.innerText.replace(/\n+$/, '').replace(/\n/g, ' | '));
+            return;
+        }
+
+        if(raw.toLowerCase() === '!profile') {
+            const name = me?.username || 'unknown';
+            const pass = localStorage.getItem('voy_p') || '(hidden)';
+            const money = document.getElementById('my-balance')?.innerText || '0';
+            const clan = myClan?.name || 'none';
+            consoleLog(`Profile: name=${name}, password=${pass}, money=${money}, clan=${clan}`);
+            return;
+        }
+
+        const calcMatch = raw.match(/^!calculate\((.+)\)$/i);
+        if(calcMatch) {
+            const expr = calcMatch[1].trim();
+            const m = expr.match(/^(-?\d+(?:\.\d+)?)\s*(\+|-|\*|x|\/|\^|plus|minus|mul|div)\s*(-?\d+(?:\.\d+)?)$/i);
+            if(!m) return consoleLog('Format: !calculate(number action number)');
+            const a = Number(m[1]);
+            const op = m[2].toLowerCase();
+            const b = Number(m[3]);
+            let result;
+            if(op === '+' || op === 'plus') result = a + b;
+            else if(op === '-' || op === 'minus') result = a - b;
+            else if(op === '*' || op === 'x' || op === 'mul') result = a * b;
+            else if(op === '/' || op === 'div') {
+                if(b === 0) return consoleLog('Error: division by zero');
+                result = a / b;
+            } else if(op === '^') result = Math.pow(a, b);
+            else return consoleLog('Unknown action');
+            consoleLog(`Result: ${result}`);
+            return;
+        }
+
+        const joinMatch = raw.match(/^!зкв\((.+)\)$/i) || raw.match(/^!zkv\((.+)\)$/i);
         if(joinMatch) {
             pendingConsoleFavorite = { mode: 'closed' };
             joinByToken(joinMatch[1]);
             return;
         }
 
-        const createMatch = raw.match(/^!\u0441\u043e\u0437\u0434\u0430\u0442\u044c\((.+)\)$/i) || raw.match(/^!create\((.+)\)$/i);
+        const createMatch = raw.match(/^!создать\((.+)\)$/i) || raw.match(/^!create\((.+)\)$/i);
         if(createMatch) {
             const body = createMatch[1].trim();
             const m = body.match(/^([^\s]+)\s+"([^"]+)"$/) || body.match(/^([^\s]+)\s+(.+)$/);
@@ -904,9 +947,9 @@ socket.on('update_dms', dms => {
             const typeRaw = (m[1] || '').toLowerCase();
             const title = (m[2] || '').trim();
             const typeMap = {
-                'chat': 'chat', '\u0447\u0430\u0442': 'chat',
-                'channel': 'channel', '\u043a\u0430\u043d\u0430\u043b': 'channel',
-                'closed': 'closed', '\u0437\u0430\u043a\u0440\u044b\u0442\u0430\u044f': 'closed', '\u0437\u043a': 'closed'
+                'chat': 'chat', 'чат': 'chat',
+                'channel': 'channel', 'канал': 'channel',
+                'closed': 'closed', 'закрытая': 'closed', 'зк': 'closed'
             };
             const mode = typeMap[typeRaw];
             if(!mode) return consoleLog('Unknown type. Use chat/channel/closed.');
