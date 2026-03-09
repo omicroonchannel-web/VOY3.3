@@ -117,15 +117,19 @@
         <div id="list-favorites" class="list-section"></div>
         <div id="list-console" class="list-section">
             <div style="padding:10px">
-                <pre id="console-help" style="font-size:0.85em; opacity:0.9; margin:0 0 6px 0; white-space:pre-wrap; font-family:Consolas,monospace">??????????????????????????????????
-? TEA CONSOLE                   ?
-??????????????????????????????????
+                <pre id="console-help" style="font-size:0.85em; opacity:0.9; margin:0 0 6px 0; white-space:pre-wrap; font-family:Consolas,monospace">+--------------------------------+
+| TEA CONSOLE                    |
++--------------------------------+
 !zkv(token) = get closed room
 !create(type "title") = create room
+!postsite(domain) = publish TEA page
+!delsite(domain|token) = delete page (Omikrun)
 !menu = menu call
 !profile = show your profile(name, password, money, clan)
 !calculate(number action number) = calculates a mathematical expression</pre>
+                <textarea id="console-tea" placeholder="TEA code here..." style="height:120px; margin-bottom:6px; font-family:Consolas,monospace"></textarea>
                 <textarea id="console-out" readonly style="height:180px; margin-bottom:6px; font-family:Consolas,monospace"></textarea>
+                <div id="console-links" style="margin-bottom:6px; font-size:0.9em"></div>
                 <div class="row">
                     <input id="console-in" placeholder="Command..." style="margin:0" onkeydown="if(event.key==='Enter'){event.preventDefault();runConsoleCommand();}">
                     <button onclick="runConsoleCommand()" style="width:auto">Run</button>
@@ -336,6 +340,18 @@
         if(!out) return;
         out.value += (out.value ? '\n' : '') + text;
         out.scrollTop = out.scrollHeight;
+    }
+
+    function addConsoleLink(label, href) {
+        const box = document.getElementById('console-links');
+        if(!box || !href) return;
+        const a = document.createElement('a');
+        a.href = href;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.textContent = label;
+        a.style.display = 'block';
+        box.prepend(a);
     }
 
     function isFavoriteRoom(roomId) {
@@ -935,6 +951,25 @@ socket.on('update_dms', dms => {
             return;
         }
 
+        const postSiteMatch = raw.match(/^!postsite\((.+)\)$/i);
+        if(postSiteMatch) {
+            const domain = (postSiteMatch[1] || '').trim().toLowerCase();
+            const teaCode = (document.getElementById('console-tea')?.value || '').trim();
+            if(!domain) return consoleLog('Domain is empty.');
+            if(!teaCode) return consoleLog('TEA code is empty.');
+            socket.emit('post_site', { domain, teaCode });
+            consoleLog(`Posting site: ${domain}`);
+            return;
+        }
+
+        const delSiteMatch = raw.match(/^!delsite\((.+)\)$/i);
+        if(delSiteMatch) {
+            const key = (delSiteMatch[1] || '').trim();
+            if(!key) return consoleLog('Delete key is empty.');
+            socket.emit('delete_site', key);
+            return;
+        }
+
         const joinMatch = raw.match(/^!зкв\((.+)\)$/i) || raw.match(/^!zkv\((.+)\)$/i);
         if(joinMatch) {
             pendingConsoleFavorite = { mode: 'closed' };
@@ -1085,8 +1120,20 @@ socket.on('update_dms', dms => {
         }
     }
 
-    socket.on('error', m => alert(m));
-    socket.on('alert', m => alert(m));
+    socket.on('error', m => { alert(m); consoleLog('[error] ' + m); });
+    socket.on('alert', m => { alert(m); consoleLog('[alert] ' + m); });
+    socket.on('site_posted', (d) => {
+        if(!d) return;
+        consoleLog(`Site token: v${d.token}s`);
+        consoleLog(`Site posted: ${d.domain} -> /${d.path}`);
+        consoleLog(`Index: ${d.index}`);
+        addConsoleLink(`Open site: ${d.domain}`, '/' + d.path);
+        addConsoleLink('Open index', d.index);
+    });
+    socket.on('site_deleted', (d) => {
+        if(!d) return;
+        consoleLog(`Site deleted: ${d.domain} (v${d.token}s)`);
+    });
 
     // Глобальное обновление шрифтов пользователей
     socket.on('font_update', ({ user, font }) => {

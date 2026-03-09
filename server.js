@@ -23,6 +23,8 @@ const init = (f, d) => { if (!fs.existsSync(path.join(DATA_DIR, f))) write(f, d)
 init('users.json', []); init('rooms.json', {}); init('clans.json', {}); init('nek_docs.json', []);
 init('items.json', []);
 init('transactions.json', []);
+init('sites.json', {});
+init('zones.json', ['orm', 'omic', 'ogh']);
 
 const BOT_NAME = "Нек";
 const BOT_VOICE = "\u0413\u041e\u041b\u041e\u0421";
@@ -33,6 +35,37 @@ const REWARD_SECRET = process.env.REWARD_SECRET || 'local_dev_reward_secret';
 app.use('/fonts', express.static(FONTS_DIR));
 app.use(express.static(__dirname));
 app.use(express.json());
+
+app.get(/^\/v([a-z0-9]+)s$/i, (req, res) => {
+    const token = normalizeSiteToken(req.params[0]);
+    const sites = read('sites.json');
+    const site = sites[token];
+    if(!site) return res.status(404).send('Site not found');
+    return res.type('html').send(renderTeaPage(site));
+});
+
+app.get('/ormolar/index.json', (req, res) => {
+    const q = String(req.query.q || '').toLowerCase().trim();
+    const sites = Object.values(read('sites.json'));
+    const filtered = q ? sites.filter(s => (s.fullDomain || '').includes(q) || (s.title || '').toLowerCase().includes(q) || (s.owner || '').toLowerCase().includes(q)) : sites;
+    const out = filtered.slice(0, 500).map(s => ({
+        domain: s.fullDomain,
+        title: s.title || s.fullDomain,
+        owner: s.owner,
+        path: `v${s.token}s`,
+        updatedAt: s.updatedAt
+    }));
+    res.json({ ok: true, count: out.length, sites: out });
+});
+
+app.get('/ormolar/index', (req, res) => {
+    const q = String(req.query.q || '').toLowerCase().trim();
+    const sites = Object.values(read('sites.json'));
+    const filtered = q ? sites.filter(s => (s.fullDomain || '').includes(q) || (s.title || '').toLowerCase().includes(q) || (s.owner || '').toLowerCase().includes(q)) : sites;
+    const rows = filtered.slice(0, 500).map(s => `<li><a href="/${`v${s.token}s`}" target="_blank">${escapeHtml(s.fullDomain)}</a> ? ${escapeHtml(s.title || '')} <small>by ${escapeHtml(s.owner || '')}</small></li>`).join('');
+    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ormolar Index</title><style>body{font-family:ui-sans-serif,system-ui;background:#0f1115;color:#e7ebf0;margin:0}main{max-width:920px;margin:0 auto;padding:24px}a{color:#80b8ff}input{width:100%;padding:10px;border-radius:8px;border:1px solid #2b3240;background:#161b22;color:#e7ebf0}li{margin:10px 0}</style></head><body><main><h1>Ormolar Index</h1><form method="get"><input name="q" value="${escapeHtml(q)}" placeholder="search domain/title/owner"></form><ul>${rows || '<li>No pages</li>'}</ul></main></body></html>`);
+});
+
 
 // Endpoint для внешних скриптов (например, bash) чтобы наградить пользователя ъмънами
 app.post('/reward', (req, res) => {
@@ -62,6 +95,83 @@ const normalizeRoomToken = (raw) => {
     if(!s) return '';
     const m = s.match(/v([a-z0-9]+)r/);
     return m ? m[1] : s.replace(/[^a-z0-9]/g, '');
+};
+
+const escapeHtml = (v) => String(v || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const safeUrl = (u) => {
+    const v = String(u || '').trim();
+    if(/^https?:\/\//i.test(v)) return v;
+    return '';
+};
+
+const normalizeSiteToken = (raw) => {
+    const s = String(raw || '').trim().toLowerCase();
+    if(!s) return '';
+    const m = s.match(/v([a-z0-9]+)s/);
+    return m ? m[1] : s.replace(/[^a-z0-9]/g, '');
+};
+
+const parseDomainInput = (raw) => {
+    const s = String(raw || '').trim().toLowerCase();
+    const m = s.match(/^([a-z0-9-]{1,32})(?:\.([a-z0-9-]{2,16}))?$/);
+    if(!m) return null;
+    const name = m[1];
+    const zone = m[2] || 'orm';
+    return { name, zone, fullDomain: `${name}.${zone}` };
+};
+
+const compileTea = (tea) => {
+    const lines = String(tea || '').split(/\r?\n/);
+    const body = [];
+    const fonts = [];
+    let currentFont = '';
+    let title = 'TEA Site';
+
+    for(const line of lines) {
+        const t = line.trim();
+        if(!t) { body.push('<div style="height:8px"></div>'); continue; }
+        if(/^title:/i.test(t)) { title = t.slice(6).trim() || title; continue; }
+        if(/^font:/i.test(t)) {
+            currentFont = t.slice(5).trim();
+            if(currentFont && !fonts.includes(currentFont)) fonts.push(currentFont);
+            continue;
+        }
+
+        const styledOpen = currentFont ? `<div style="font-family:${escapeHtml(currentFont)}">` : '';
+        const styledClose = currentFont ? '</div>' : '';
+
+        if(/^h1:/i.test(t)) body.push(`${styledOpen}<h1>${escapeHtml(t.slice(3).trim())}</h1>${styledClose}`);
+        else if(/^h2:/i.test(t)) body.push(`${styledOpen}<h2>${escapeHtml(t.slice(3).trim())}</h2>${styledClose}`);
+        else if(/^h3:/i.test(t)) body.push(`${styledOpen}<h3>${escapeHtml(t.slice(3).trim())}</h3>${styledClose}`);
+        else if(/^img:/i.test(t)) {
+            const u = safeUrl(t.slice(4).trim());
+            if(u) body.push(`<img src="${u}" style="max-width:100%;border-radius:8px">`);
+        }
+        else if(/^link:/i.test(t)) {
+            const rawLink = t.slice(5).trim();
+            const parts = rawLink.split('|');
+            const text = escapeHtml((parts[0] || '').trim() || 'link');
+            const u = safeUrl((parts[1] || parts[0] || '').trim());
+            if(u) body.push(`${styledOpen}<p><a href="${u}" target="_blank" rel="noopener">${text}</a></p>${styledClose}`);
+        }
+        else body.push(`${styledOpen}<p>${escapeHtml(t)}</p>${styledClose}`);
+    }
+
+    return { title, fonts, html: body.join('\n') };
+};
+
+const renderTeaPage = (site) => {
+    const fontPrefix = (site.fonts || []).map(f => `'${String(f).replace(/'/g, "")}'`).join(', ');
+    const family = fontPrefix ? `${fontPrefix}, ui-sans-serif, system-ui` : 'ui-sans-serif, system-ui';
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(site.title || site.fullDomain)}</title>
+<style>body{margin:0;background:#111;color:#eee;font-family:${family}}main{max-width:960px;margin:0 auto;padding:24px}a{color:#7cb7ff}h1,h2,h3{margin:0 0 12px}p{line-height:1.55}small{opacity:.7}</style></head><body><main><small>${escapeHtml(site.fullDomain)} ? by ${escapeHtml(site.owner)}</small>${site.html || ''}</main></body></html>`;
 };
 
 // Утилита для фильтрации комнат: публичные отдельно, ЛС отдельно
@@ -403,6 +513,83 @@ io.on('connection', (socket) => {
         const room = Object.values(rooms).find(x => x.isClosed && x.token === token);
         if(!room) return socket.emit('error', 'Закрытая комната по токену не найдена.');
         socket.emit('token_resolved', { id: room.id, token });
+    });
+
+
+    socket.on('post_site', (payload) => {
+        if(!me) return;
+        const domainRaw = payload?.domain;
+        const teaCode = String(payload?.teaCode || '').trim();
+        const parsedDomain = parseDomainInput(domainRaw);
+        if(!parsedDomain) return socket.emit('error', 'Invalid domain. Use name.zone or name');
+        if(!teaCode) return socket.emit('error', 'TEA code is empty.');
+
+        const zones = read('zones.json');
+        if(!zones.includes(parsedDomain.zone)) {
+            zones.push(parsedDomain.zone);
+            write('zones.json', zones);
+        }
+
+        const sites = read('sites.json');
+        let existingToken = null;
+        for(const tk in sites) {
+            if((sites[tk].fullDomain || '').toLowerCase() === parsedDomain.fullDomain) {
+                existingToken = tk;
+                break;
+            }
+        }
+
+        if(existingToken && sites[existingToken].owner !== me.username && !isAdmin) {
+            return socket.emit('error', 'Domain already owned by another user.');
+        }
+
+        let token = existingToken || generateToken();
+        while(!existingToken && sites[token]) token = generateToken();
+
+        const compiled = compileTea(teaCode);
+        const now = new Date().toISOString();
+        const prev = existingToken ? sites[existingToken] : null;
+        sites[token] = {
+            token,
+            domain: parsedDomain.name,
+            zone: parsedDomain.zone,
+            fullDomain: parsedDomain.fullDomain,
+            owner: prev?.owner || me.username,
+            title: compiled.title || parsedDomain.fullDomain,
+            teaCode,
+            html: compiled.html,
+            fonts: compiled.fonts,
+            createdAt: prev?.createdAt || now,
+            updatedAt: now
+        };
+        write('sites.json', sites);
+
+        socket.emit('site_posted', {
+            ok: true,
+            token,
+            path: `v${token}s`,
+            domain: parsedDomain.fullDomain,
+            index: '/ormolar/index'
+        });
+    });
+
+    socket.on('delete_site', (rawKey) => {
+        if(!me) return;
+        if(!isAdmin && me.username !== ADMIN_LOGIN) return socket.emit('error', 'Only Omikrun can delete sites.');
+        const key = String(rawKey || '').trim().toLowerCase();
+        if(!key) return socket.emit('error', 'Empty key.');
+
+        const sites = read('sites.json');
+        let token = normalizeSiteToken(key);
+        if(!sites[token]) {
+            token = Object.keys(sites).find(t => (sites[t].fullDomain || '').toLowerCase() === key || (sites[t].domain || '').toLowerCase() === key) || '';
+        }
+        if(!token || !sites[token]) return socket.emit('error', 'Site not found.');
+
+        const domain = sites[token].fullDomain;
+        delete sites[token];
+        write('sites.json', sites);
+        socket.emit('site_deleted', { ok: true, domain, token });
     });
 
     // --- Messaging & Commands ---
