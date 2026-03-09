@@ -835,6 +835,10 @@ socket.on('update_dms', dms => {
         return text.replace(/v([a-z0-9]{8,32})r/gi, (match, token) => `<a href="#" class="token-link" data-token="${token}">${match}</a>`);
     }
 
+    function linkifyUrlText(text) {
+        return text.replace(/(https?:\/\/[^\s<]+)/gi, (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
+    }
+
     function addMsg(m) {
         if(m.userFont) registerUserFont(m.user, m.userFont);
         const c = document.getElementById('msgs-cont');
@@ -855,7 +859,8 @@ socket.on('update_dms', dms => {
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
             const safeTextWithBreaks = safeText.replace(/\n/g, '<br>');
-            const safeTextWithTokens = linkifyTokenText(safeTextWithBreaks);
+            const safeTextWithUrls = linkifyUrlText(safeTextWithBreaks);
+            const safeTextWithTokens = linkifyTokenText(safeTextWithUrls);
             if(hasPUA) {
                 // Для PUA делаем текст крупнее и не мешаем глобальный шрифт
                 content = `<span class="u-font-${m.user}" style="font-size:1.3em; line-height:1.3;">${safeTextWithTokens}</span>`;
