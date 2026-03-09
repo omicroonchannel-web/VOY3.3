@@ -24,12 +24,30 @@ init('users.json', []); init('rooms.json', {}); init('clans.json', {}); init('ne
 init('items.json', []);
 init('transactions.json', []);
 init('sites.json', {});
+init('pages.json', {});
 init('zones.json', ['orm', 'omic', 'ogh']);
+const readPagesStore = () => {
+    const pages = read('pages.json');
+    if(pages && !Array.isArray(pages) && typeof pages === 'object' && Object.keys(pages).length) return pages;
+    const legacy = read('sites.json');
+    if(legacy && !Array.isArray(legacy) && typeof legacy === 'object' && Object.keys(legacy).length) {
+        write('pages.json', legacy);
+        return legacy;
+    }
+    return (pages && !Array.isArray(pages) && typeof pages === 'object') ? pages : {};
+};
+
+const writePagesStore = (pages) => {
+    write('pages.json', pages);
+    // Keep compatibility with older builds that still read sites.json
+    write('sites.json', pages);
+};
+
 const DEFAULT_SITE_ZONES = ['ormolar', 'orm', 'omic', 'ogh'];
 
 const ensureOrmolarInfra = () => {
-    const sites = read('sites.json');
-    if(!sites || Array.isArray(sites) || typeof sites !== 'object') write('sites.json', {});
+    const pages = readPagesStore();
+    if(!pages || Array.isArray(pages) || typeof pages !== 'object') writePagesStore({});
 
     let zones = read('zones.json');
     if(!Array.isArray(zones)) zones = [];
@@ -57,7 +75,7 @@ app.use(express.json());
 app.get(/^\/v([a-z0-9]+)s$/i, (req, res) => {
     ensureOrmolarInfra();
     const token = normalizeSiteToken(req.params[0]);
-    const sites = read('sites.json');
+    const sites = readPagesStore();
     const site = sites[token];
     if(!site) return res.status(404).send('Site not found');
     return res.type('html').send(renderTeaPage(site));
@@ -66,7 +84,7 @@ app.get(/^\/v([a-z0-9]+)s$/i, (req, res) => {
 app.get('/pages/index.json', (req, res) => {
     ensureOrmolarInfra();
     const q = String(req.query.q || '').toLowerCase().trim();
-    const sites = Object.values(read('sites.json'));
+    const sites = Object.values(readPagesStore());
     const filtered = q ? sites.filter(s => (s.fullDomain || '').includes(q) || (s.title || '').toLowerCase().includes(q) || (s.owner || '').toLowerCase().includes(q)) : sites;
     const out = filtered.slice(0, 500).map(s => ({
         domain: s.fullDomain,
@@ -86,7 +104,7 @@ app.get('/ormolar/index.json', (req, res) => res.redirect('/pages/index.json'));
 app.get('/pages/index', (req, res) => {
     ensureOrmolarInfra();
     const q = String(req.query.q || '').toLowerCase().trim();
-    const sites = Object.values(read('sites.json'));
+    const sites = Object.values(readPagesStore());
     const filtered = q ? sites.filter(s => (s.fullDomain || '').includes(q) || (s.title || '').toLowerCase().includes(q) || (s.owner || '').toLowerCase().includes(q)) : sites;
     const rows = filtered.slice(0, 500).map(s => {
         const path = `v${s.token}s`;
@@ -553,7 +571,7 @@ io.on('connection', (socket) => {
     socket.on('list_sites', () => {
         ensureOrmolarInfra();
         if(!me) return;
-        const sites = Object.values(read('sites.json'))
+        const sites = Object.values(readPagesStore())
             .sort((a,b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
             .slice(0, 500)
             .map(s => ({
@@ -584,7 +602,7 @@ io.on('connection', (socket) => {
             write('zones.json', zones);
         }
 
-        const sites = read('sites.json');
+        const sites = readPagesStore();
         let existingToken = null;
         for(const tk in sites) {
             if((sites[tk].fullDomain || '').toLowerCase() === parsedDomain.fullDomain) {
@@ -616,7 +634,7 @@ io.on('connection', (socket) => {
             createdAt: prev?.createdAt || now,
             updatedAt: now
         };
-        write('sites.json', sites);
+        writePagesStore(sites);
 
         socket.emit('site_posted', {
             ok: true,
@@ -634,7 +652,7 @@ io.on('connection', (socket) => {
         const key = String(rawKey || '').trim().toLowerCase();
         if(!key) return socket.emit('error', 'Empty key.');
 
-        const sites = read('sites.json');
+        const sites = readPagesStore();
         let token = normalizeSiteToken(key);
         if(!sites[token]) {
             token = Object.keys(sites).find(t => (sites[t].fullDomain || '').toLowerCase() === key || (sites[t].domain || '').toLowerCase() === key) || '';
@@ -643,7 +661,7 @@ io.on('connection', (socket) => {
 
         const domain = sites[token].fullDomain;
         delete sites[token];
-        write('sites.json', sites);
+        writePagesStore(sites);
         socket.emit('site_deleted', { ok: true, domain, token });
     });
 
