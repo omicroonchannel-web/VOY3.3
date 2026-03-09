@@ -28,6 +28,7 @@
         .msg.my { align-self: flex-end; background: var(--msg-my); }
         .msg.sys { align-self: center; background: var(--msg-sys); border: 1px solid var(--primary); max-width: 95%; font-size: 0.9em; }
         .msg img { max-width: 100%; border-radius: 5px; margin-top: 5px; display: block; }
+        .msg video { max-width: 100%; border-radius: 5px; margin-top: 5px; display: block; background:#000; }
         
         .reply-ctx { border-left: 3px solid var(--accent); background: rgba(0,0,0,0.2); padding: 4px; font-size: 0.8em; margin-bottom: 4px; border-radius: 4px; opacity: 0.8; cursor: pointer; }
         .reply-bar { display: none; background: var(--panel-4); padding: 5px 10px; border-top: 1px solid var(--accent); font-size: 0.8em; align-items: center; justify-content: space-between; }
@@ -155,7 +156,7 @@
 
         <div id="pua-grid"></div>
         <div style="padding:10px; background:var(--panel-2); display:flex; align-items:center; gap:8px">
-            <label style="font-size:1.5em; cursor:pointer">📎<input type="file" id="f-upl" hidden onchange="sendFile()"></label>
+            <label style="font-size:1.5em; cursor:pointer">📎<input type="file" id="f-upl" accept="image/*,video/*" hidden onchange="sendFile()"></label>
             <button onclick="togglePUA()" style="width:auto">⌨</button>
             <textarea id="m-in" placeholder="&#1057;&#1086;&#1086;&#1073;&#1097;&#1077;&#1085;&#1080;&#1077;... (!&#1092;&#1072;&#1082;&#1090;, !&#1079;&#1072;&#1087;&#1088;&#1077;&#1090;, !&#1072;&#1076;&#1084;&#1080;&#1085;) &#1080;&#1083;&#1080; &#1091;&#1087;&#1086;&#1084;&#1103;&#1085;&#1080; &#1053;&#1077;&#1082; &#1076;&#1083;&#1103; &#1087;&#1086;&#1084;&#1086;&#1097;&#1080;" style="margin:0; height:70px; resize:vertical"></textarea>
             <button onclick="sendMsg()" style="width:auto">➤</button>
@@ -806,7 +807,8 @@ socket.on('update_dms', dms => {
         const f = document.getElementById('f-upl').files[0];
         if(!f || !curRoom) return;
         const b64 = await toBase64(f);
-        socket.emit('send_msg', { roomId: curRoom, file: b64, type: f.type.startsWith('image') ? 'img' : 'file', text: f.name });
+        const type = f.type.startsWith('image') ? 'img' : (f.type.startsWith('video') ? 'video' : 'file');
+        socket.emit('send_msg', { roomId: curRoom, file: b64, type, text: f.name });
     }
 
     socket.on('new_msg', addMsg);
@@ -829,6 +831,7 @@ socket.on('update_dms', dms => {
         let content = m.text;
         if(m.type === 'img') content = `<img src="${m.file}">`;
         if(m.type === 'file') content = `<a href="${m.file}" download="${m.text}">📄 ${m.text}</a>`;
+        if(m.type === 'video') content = `<video controls preload=\"metadata\" src=\"${m.file}\"></video>`;
         if(!isSys && m.type === 'text') {
             const hasPUA = /[\uE000-\uF8FF]/.test(m.text);
             const safeText = m.text
