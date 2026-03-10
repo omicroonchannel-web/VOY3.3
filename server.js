@@ -9,9 +9,10 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 5e7 });
 
-const DATA_DIR = path.join(__dirname, 'data'), FONTS_DIR = path.join(__dirname, 'fonts');
+const DATA_DIR = path.join(__dirname, 'data'), FONTS_DIR = path.join(__dirname, 'fonts'), ROOM_AVA_DIR = path.join(__dirname, 'room_avatars');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 if (!fs.existsSync(FONTS_DIR)) fs.mkdirSync(FONTS_DIR);
+if (!fs.existsSync(ROOM_AVA_DIR)) fs.mkdirSync(ROOM_AVA_DIR);
 
 const read = (f) => {
     try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, f))); } 
@@ -62,6 +63,12 @@ const ensureOrmolarInfra = () => {
 };
 ensureOrmolarInfra();
 
+const ADMIN_LOGIN = "Омикрун";
+const ADMIN_PASS = "omicroon1326";
+const TEAPG_BUS_ROOM_ID = 'room_teapg_handlers';
+const TEAPG_BUS_TITLE = 'TEAPG Handler Bus';
+const generateToken = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+
 const ensureTeapgBusRoom = () => {
     const rooms = read('rooms.json');
     let changed = false;
@@ -101,6 +108,7 @@ const HF_MODEL = "mistralai/Mistral-7B-Instruct-v0.2"; // Модель для г
 const REWARD_SECRET = process.env.REWARD_SECRET || 'local_dev_reward_secret';
 
 app.use('/fonts', express.static(FONTS_DIR));
+app.use('/room_avatars', express.static(ROOM_AVA_DIR));
 app.use(express.static(__dirname));
 app.use(express.json());
 
@@ -164,13 +172,6 @@ app.post('/reward', (req, res) => {
     io.emit('users_update');
     return res.json({ ok: true, balance: users[idx].balance });
 });
-
-const ADMIN_LOGIN = "Омикрун";
-const ADMIN_PASS = "omicroon1326";
-const TEAPG_BUS_ROOM_ID = 'room_teapg_handlers';
-const TEAPG_BUS_TITLE = 'TEAPG Handler Bus';
-
-const generateToken = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
 const normalizeRoomToken = (raw) => {
     const s = String(raw || '').trim().toLowerCase();
     if(!s) return '';
@@ -502,7 +503,8 @@ io.on('connection', (socket) => {
             id, title: d.title, owner: me.username, 
             password: d.password || null, hasPass: !!d.password, 
             mode: d.mode, msgs: [], pinned: null, bannedWords: [],
-            isDm: false, admins: [], isClosed, token
+            isDm: false, admins: [], isClosed, token,
+            avatar: r[id]?.avatar || null
         };
         write('rooms.json', r); 
         emitRoomsToAll(r);
@@ -553,6 +555,37 @@ io.on('connection', (socket) => {
             write('rooms.json', rooms);
             emitRoomsToAll(rooms);
             io.to(roomId).emit('room_closed'); 
+        }
+    });
+
+    socket.on('set_room_avatar', (payload) => {
+        if(!me) return;
+        const { roomId, file } = payload || {};
+        if(!roomId || typeof file !== 'string' || !file.includes('base64,')) return socket.emit('error', 'Неверные данные аватарки.');
+        const rooms = read('rooms.json');
+        const r = rooms[roomId];
+        if(!r || r.isDm) return socket.emit('error', 'Комната не найдена.');
+        const roomAdmins = r.admins || [];
+        if(r.owner !== me.username && !isAdmin && !roomAdmins.includes(me.username)) {
+            return socket.emit('error', 'Только владелец или со-админ может менять аватар комнаты.');
+        }
+        try {
+            const base64 = file.split('base64,')[1] || '';
+            const buf = Buffer.from(base64, 'base64');
+            if(buf.length > 2 * 1024 * 1024) return socket.emit('error', 'Аватар слишком большой (максимум 2 МБ).');
+            const ext = '.png';
+            const safeId = String(roomId).replace(/[^a-zA-Z0-9_-]/g, '_');
+            const fileName = `${safeId}_${Date.now()}${ext}`;
+            const outPath = path.join(ROOM_AVA_DIR, fileName);
+            fs.writeFileSync(outPath, buf);
+            r.avatar = `/room_avatars/${fileName}`;
+            rooms[roomId] = r;
+            write('rooms.json', rooms);
+            emitRoomsToAll(rooms);
+            io.to(roomId).emit('room_avatar_updated', { roomId, avatar: r.avatar });
+        } catch (e) {
+            console.error('Failed to save room avatar', e);
+            socket.emit('error', 'Не удалось сохранить аватар комнаты.');
         }
     });
 

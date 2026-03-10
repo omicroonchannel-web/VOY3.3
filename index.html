@@ -178,7 +178,11 @@ Plain text line.</pre>
     </div>
 
     <div id="scr-chat" class="screen">
-        <div class="header"><button onclick="show('scr-lobby')" style="width:auto">←</button><b id="chat-title">...</b></div>
+        <div class="header">
+            <button onclick="show('scr-lobby')" style="width:auto">←</button>
+            <img id="chat-ava" class="ava" style="width:32px;height:32px;object-fit:cover;cursor:pointer;display:none" onclick="openRoomAvatarDialog()">
+            <b id="chat-title">...</b>
+        </div>
         <div id="pinned-msg" class="pinned-bar"><span id="pin-text">📌 Закреп</span><button onclick="unpin()" id="unpin-ui" class="btn-small">✕</button></div>
         
         <div id="msgs-cont" class="msgs-area"></div>
@@ -195,6 +199,7 @@ Plain text line.</pre>
             <textarea id="m-in" placeholder="&#1057;&#1086;&#1086;&#1073;&#1097;&#1077;&#1085;&#1080;&#1077;... (!&#1092;&#1072;&#1082;&#1090;, !&#1079;&#1072;&#1087;&#1088;&#1077;&#1090;, !&#1072;&#1076;&#1084;&#1080;&#1085;) &#1080;&#1083;&#1080; &#1091;&#1087;&#1086;&#1084;&#1103;&#1085;&#1080; &#1053;&#1077;&#1082; &#1076;&#1083;&#1103; &#1087;&#1086;&#1084;&#1086;&#1097;&#1080;" style="margin:0; height:70px; resize:vertical"></textarea>
             <button onclick="sendMsg()" style="width:auto">➤</button>
         </div>
+        <input type="file" id="room-ava-file" accept="image/*" hidden onchange="uploadRoomAvatar()">
     </div>
 
     <div id="scr-profile" class="screen">
@@ -301,7 +306,7 @@ Plain text line.</pre>
 
 <script>
     const socket = io();
-    let me = null, curRoom = null, replyTo = null, viewingUser = null;
+    let me = null, curRoom = null, curRoomMeta = null, replyTo = null, viewingUser = null;
     let neoLetters = [];
     let favoriteRooms = {};
     let latestRooms = {};
@@ -521,13 +526,16 @@ Plain text line.</pre>
         const l = document.getElementById('list-rooms'); l.innerHTML = '';
         Object.values(latestRooms).forEach(r => {
             const d = document.createElement('div');
-            d.style = "padding:12px; margin-bottom:5px; background:var(--panel-3); border-radius:6px; position:relative";
+            d.style = "padding:12px; margin-bottom:5px; background:var(--panel-3); border-radius:6px; position:relative; display:flex; align-items:center; gap:8px";
+            const ava = r.avatar ? `<img src="${r.avatar}" class="ava" style="width:32px;height:32px;object-fit:cover;">` : '';
             let delBtn = (me && (me.username === r.owner || me.isAdmin)) ? `<button class="btn-danger btn-small" style="float:right; margin-left:10px" onclick="deleteRoom('${r.id}', event)">&#128465;</button>` : '';
             const favBtn = favoriteBtn(r.id, { id: r.id, source: 'rooms', title: r.title, mode: r.mode, hasPass: !!r.hasPass, owner: r.owner, admins: r.admins || [] });
             const icon = r.mode === 'channel' ? '&#128226;' : (r.mode === 'closed' ? '&#128274;' : '#');
             const lockMark = (r.hasPass || r.isClosed) ? ' &#128274;' : '';
-            d.innerHTML = `<div><b>${icon} ${r.title}</b>${lockMark} ${favBtn} ${delBtn}</div>
-                           <div style="font-size:0.8em; opacity:0.6">Создатель: ${r.owner}</div>`;
+            d.innerHTML = `${ava}<div style="flex:1 1 auto; min-width:0;">
+                               <div><b>${icon} ${r.title}</b>${lockMark} ${favBtn} ${delBtn}</div>
+                               <div style="font-size:0.8em; opacity:0.6">Создатель: ${r.owner}</div>
+                           </div>`;
             d.onclick = (e) => {
                 if(e.target.tagName === 'BUTTON') return;
                 const isOwnerOrAdmin = me && (me.username === r.owner || me.isAdmin || (r.admins || []).includes(me.username));
@@ -792,7 +800,15 @@ socket.on('update_dms', dms => {
 
     // --- Chat ---
     socket.on('room_history', r => {
+        curRoomMeta = r;
         document.getElementById('chat-title').innerText = r.title;
+        const chatAva = document.getElementById('chat-ava');
+        if(r.avatar) {
+            chatAva.src = r.avatar;
+            chatAva.style.display = 'block';
+        } else {
+            chatAva.style.display = 'none';
+        }
         document.getElementById('msgs-cont').innerHTML = '';
         cancelReply();
         r.msgs.forEach(addMsg);
@@ -963,6 +979,53 @@ socket.on('update_dms', dms => {
             document.getElementById('unpin-ui').style.display = (me.username === msg.roomOwner || me.isAdmin) ? 'block' : 'none';
         } else { bar.style.display = 'none'; }
     }
+
+    function openRoomAvatarDialog() {
+        if(!curRoomMeta || !me) return;
+        const roomAdmins = curRoomMeta.admins || [];
+        const canEdit = (me.username === curRoomMeta.owner) || me.isAdmin || roomAdmins.includes(me.username);
+        if(!canEdit) {
+            alert('Только владелец или со-админ может менять аватар комнаты.');
+            return;
+        }
+        const inp = document.getElementById('room-ava-file');
+        if(inp) inp.click();
+    }
+
+    async function uploadRoomAvatar() {
+        const inp = document.getElementById('room-ava-file');
+        if(!inp || !curRoom) return;
+        const f = inp.files[0];
+        if(!f) return;
+        const maxSize = 2 * 1024 * 1024;
+        if(f.size > maxSize) {
+            alert('Картинка слишком большая (максимум 2 МБ).');
+            inp.value = '';
+            return;
+        }
+        const b64 = await toBase64(f);
+        socket.emit('set_room_avatar', { roomId: curRoom, file: b64 });
+        inp.value = '';
+    }
+
+    socket.on('room_avatar_updated', (d) => {
+        if(!d || !d.roomId) return;
+        if(curRoom === d.roomId) {
+            curRoomMeta = curRoomMeta || {};
+            curRoomMeta.avatar = d.avatar;
+            const chatAva = document.getElementById('chat-ava');
+            if(d.avatar) {
+                chatAva.src = d.avatar;
+                chatAva.style.display = 'block';
+            } else {
+                chatAva.style.display = 'none';
+            }
+        }
+        if(latestRooms && latestRooms[d.roomId]) {
+            latestRooms[d.roomId].avatar = d.avatar;
+        }
+        renderFavorites();
+    });
 
     function getLocalPagesKey() {
         return me ? `voy_local_pages_${me.username}` : 'voy_local_pages_guest';
