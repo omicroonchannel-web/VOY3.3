@@ -86,6 +86,9 @@
                 <div style="font-size:0.9em; opacity:0.9">Ъмън: <b id="my-balance">0</b></div>
                 <button class="btn-small" onclick="openShop()">Магазин</button>
             </div>
+            <div id="curfew-indicator" style="font-size:0.7em; padding:2px 6px; border-radius:6px; background:#8e44ad; color:#fff; display:none; text-align:center;">
+                CURFEW
+            </div>
             <button class="btn-small" onclick="show('scr-clans')">КЛАНЫ</button>
             <button class="btn-small" onclick="show('scr-neo')">НЕО</button>
             <button class="btn-small" onclick="socket.emit('refresh_lists')">↻</button>
@@ -320,6 +323,8 @@ Plain text line.</pre>
     let localPages = [];
 
     // --- Helpers ---
+    let curfewState = { active: false, limitBytesPerMinute: 0, proxy: null };
+
     function registerUserFont(username, fontPath) {
         if(!fontPath || document.getElementById(`style-${username}`)) return;
         const style = document.createElement('style');
@@ -470,6 +475,33 @@ Plain text line.</pre>
         saveFavorites();
     }
 
+
+    // --- Curfew UI ---
+    function updateCurfewUI() {
+        const el = document.getElementById('curfew-indicator');
+        if(!el) return;
+        if(!curfewState || !curfewState.active) {
+            el.style.display = 'none';
+            return;
+        }
+        const mb = (curfewState.limitBytesPerMinute || 0) / (1024*1024);
+        const proxy = curfewState.proxy ? ` • ${curfewState.proxy}` : '';
+        el.textContent = `CURFEW ${mb || 0}MB/min${proxy}`;
+        el.style.display = 'block';
+    }
+
+    socket.on('curfew_state', (st) => {
+        curfewState = st || { active:false, limitBytesPerMinute:0, proxy:null };
+        updateCurfewUI();
+    });
+
+    socket.on('proxy_rotation', (info) => {
+        if(!info) return;
+        if(!curfewState) curfewState = {};
+        curfewState.active = !!info.active;
+        curfewState.proxy = info.proxy || null;
+        updateCurfewUI();
+    });
 
     // --- Auth ---
 
@@ -1215,6 +1247,14 @@ socket.on('update_dms', dms => {
             const money = document.getElementById('my-balance')?.innerText || '0';
             const clan = myClan?.name || 'none';
             consoleLog(`Profile: name=${name}, password=${pass}, money=${money}, clan=${clan}`);
+            return;
+        }
+
+        const curfewMatch = raw.match(/^!curfew\((on|off)\)$/i);
+        if(curfewMatch) {
+            const mode = curfewMatch[1].toLowerCase();
+            socket.emit('set_curfew', { enabled: mode === 'on' });
+            consoleLog(`Curfew ${mode === 'on' ? 'ON' : 'OFF'} requested.`);
             return;
         }
 

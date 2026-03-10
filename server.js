@@ -69,6 +69,64 @@ const TEAPG_BUS_ROOM_ID = 'room_teapg_handlers';
 const TEAPG_BUS_TITLE = 'TEAPG Handler Bus';
 const generateToken = () => Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
 
+// --- Curfew (комендантский час) ---
+// В это время ограничиваем исходящий трафик пользователей и крутим "прокси-слоты".
+let CURFEW_ENABLED = true;
+// Пример: с 00:00 до 06:00 по серверному времени
+const CURFEW_START_HOUR = 0;
+const CURFEW_END_HOUR = 6;
+const CURFEW_BYTES_PER_MINUTE = 4 * 1024 * 1024; // 4 МБ в минуту на пользователя
+const CURFEW_PROXY_ROTATION_MS = 60 * 1000; // раз в минуту
+const CURFEW_PROXIES = ['proxy-slot-1', 'proxy-slot-2', 'proxy-slot-3'];
+
+const isCurfewActive = () => {
+    if (!CURFEW_ENABLED) return false;
+    const now = new Date();
+    const h = now.getHours();
+    if (CURFEW_START_HOUR <= CURFEW_END_HOUR) {
+        return h >= CURFEW_START_HOUR && h < CURFEW_END_HOUR;
+    }
+    // Окно через полночь, например 22-06
+    return h >= CURFEW_START_HOUR || h < CURFEW_END_HOUR;
+};
+
+const userCurfewStats = {};
+
+const registerCurfewUsage = (username, bytes) => {
+    if (!isCurfewActive()) return true;
+    if (!username) return true;
+    const now = Date.now();
+    const key = String(username);
+    const stat = userCurfewStats[key] || { windowStart: now, used: 0 };
+    if (now - stat.windowStart >= 60 * 1000) {
+        stat.windowStart = now;
+        stat.used = 0;
+    }
+    if (stat.used + bytes > CURFEW_BYTES_PER_MINUTE) {
+        userCurfewStats[key] = stat;
+        return false;
+    }
+    stat.used += bytes;
+    userCurfewStats[key] = stat;
+    return true;
+};
+
+let curfewProxyIndex = 0;
+let curfewTimer = null;
+
+const getCurrentCurfewProxy = () => {
+    if (!CURFEW_PROXIES.length) return null;
+    return CURFEW_PROXIES[curfewProxyIndex % CURFEW_PROXIES.length];
+};
+
+const broadcastCurfewState = () => {
+    io.emit('curfew_state', {
+        active: isCurfewActive(),
+        limitBytesPerMinute: CURFEW_BYTES_PER_MINUTE,
+        proxy: getCurrentCurfewProxy()
+    });
+};
+
 const ensureTeapgBusRoom = () => {
     const rooms = read('rooms.json');
     let changed = false;
@@ -494,6 +552,8 @@ io.on('connection', (socket) => {
 
     // --- Rooms & DMs ---
 
+    broadcastCurfewState();
+
     socket.on('create_room', (d) => {
         if(!me) return;
         const r = read('rooms.json'), id = 'room_' + Date.now();
@@ -770,12 +830,40 @@ io.on('connection', (socket) => {
         socket.emit('alert', 'TEAPG broadcasted.');
     });
 
+    socket.on('set_curfew', (payload) => {
+        if(!me) return;
+        if(me.username !== ADMIN_LOGIN) return socket.emit('error', 'Только Омикрун может управлять комендантским часом.');
+        const enabled = !!(payload && typeof payload.enabled === 'boolean' ? payload.enabled : false);
+        CURFEW_ENABLED = enabled;
+        // сброс статистики, чтобы не тянуть лимиты между режимами
+        Object.keys(userCurfewStats).forEach(k => { delete userCurfewStats[k]; });
+        updateCurfewTimers();
+        broadcastCurfewState();
+        socket.emit('alert', `Комендантский час ${enabled ? 'ВКЛЮЧЕН' : 'ВЫКЛЮЧЕН'}.`);
+    });
+
     // --- Messaging & Commands ---
 
     socket.on('send_msg', (d) => {
         if(!me) return;
         const rooms = read('rooms.json'), r = rooms[d.roomId];
         if(!r) return;
+
+        // Во время комендантского часа ограничиваем исходящий пользовательский трафик.
+        if (isCurfewActive()) {
+            let bytes = 0;
+            if (typeof d.text === 'string') {
+                bytes += Buffer.byteLength(d.text, 'utf8');
+            }
+            if (typeof d.file === 'string' && d.file.includes('base64,')) {
+                const b64 = d.file.split('base64,')[1] || '';
+                // Примерная оценка исходного размера: base64 ~ 4/3 от байтов
+                bytes += Math.floor(b64.length * 0.75);
+            }
+            if (!registerCurfewUsage(me.username, bytes)) {
+                return socket.emit('error', 'Комендантский час: лимит 4 МБ исходящих данных в минуту исчерпан. Подождите немного.');
+            }
+        }
 
         // Incoming .teapg files are auto-forwarded to the handler bus and replicated to clients.
         if(d.type === 'file' && /\.teapg$/i.test(String(d.text || '')) && typeof d.file === 'string' && d.file.includes('base64,')) {
@@ -1333,3 +1421,28 @@ io.on('connection', (socket) => {
 });
 
 server.listen(3000, () => console.log('VOY v4.0 Messenger Update running on 3000'));
+
+// Фоновый таймер для переключения "прокси-слотов" во время комендантского часа.
+const updateCurfewTimers = () => {
+    const active = isCurfewActive();
+    if (active && !curfewTimer && CURFEW_PROXIES.length) {
+        curfewTimer = setInterval(() => {
+            if (!isCurfewActive()) return;
+            curfewProxyIndex = (curfewProxyIndex + 1) % CURFEW_PROXIES.length;
+            io.emit('proxy_rotation', {
+                active: true,
+                proxy: getCurrentCurfewProxy()
+            });
+        }, CURFEW_PROXY_ROTATION_MS);
+    } else if (!active && curfewTimer) {
+        clearInterval(curfewTimer);
+        curfewTimer = null;
+        io.emit('proxy_rotation', { active: false, proxy: null });
+    }
+};
+
+if (CURFEW_ENABLED) {
+    setInterval(updateCurfewTimers, 30 * 1000);
+    // начальное состояние
+    updateCurfewTimers();
+}
