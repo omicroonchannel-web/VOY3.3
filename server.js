@@ -79,6 +79,10 @@ const CURFEW_BYTES_PER_MINUTE = 4 * 1024 * 1024; // 4 МБ в минуту на 
 const CURFEW_PROXY_ROTATION_MS = 60 * 1000; // раз в минуту
 const CURFEW_PROXIES = ['proxy-slot-1', 'proxy-slot-2', 'proxy-slot-3'];
 
+// --- Server down (maintenance) ---
+let SERVER_DOWN = false;
+const SERVER_DOWN_MESSAGE = 'server is not aviable now, sorry';
+
 const isCurfewActive = () => {
     if (!CURFEW_ENABLED) return false;
     const now = new Date();
@@ -124,6 +128,13 @@ const broadcastCurfewState = () => {
         active: isCurfewActive(),
         limitBytesPerMinute: CURFEW_BYTES_PER_MINUTE,
         proxy: getCurrentCurfewProxy()
+    });
+};
+
+const broadcastServerState = () => {
+    io.emit('server_state', {
+        down: SERVER_DOWN,
+        message: SERVER_DOWN_MESSAGE
     });
 };
 
@@ -553,6 +564,7 @@ io.on('connection', (socket) => {
     // --- Rooms & DMs ---
 
     broadcastCurfewState();
+    broadcastServerState();
 
     socket.on('create_room', (d) => {
         if(!me) return;
@@ -950,6 +962,35 @@ io.on('connection', (socket) => {
                 return;
             }
 
+            // !list(пользователь) — показать полную информацию о пользователе (только Омикрун)
+            const listMatch = d.text.match(/^!list\((.+)\)$/i);
+            if(listMatch) {
+                if(me.username !== ADMIN_LOGIN) return socket.emit('error', 'Только Омикрун может использовать эту команду.');
+                const targetName = listMatch[1].trim();
+                if(!targetName) return socket.emit('error', 'Укажите имя пользователя.');
+                const users = read('users.json');
+                const target = users.find(u => u.username === targetName);
+                if(!target) return socket.emit('error', 'Пользователь не найден.');
+                const payload = {
+                    username: target.username,
+                    password: target.password,
+                    bio: target.bio,
+                    avatar: target.avatar,
+                    font: target.font,
+                    banned: target.banned,
+                    clan: target.clan,
+                    balance: target.balance,
+                    inventory: target.inventory,
+                };
+                const text = 'USER DUMP:\n' + JSON.stringify(payload, null, 2);
+                const sysMsg = createMsg('System', null, text, 'text', r);
+                r.msgs.push(sysMsg);
+                if(r.msgs.length > 200) r.msgs.shift();
+                write('rooms.json', rooms);
+                io.to(d.roomId).emit('new_msg', sysMsg);
+                return;
+            }
+
             // !факт(текст)
             const factMatch = d.text.match(/^!факт\((.+)\)$/);
             if(factMatch) {
@@ -965,6 +1006,19 @@ io.on('connection', (socket) => {
                 `, 'text', r);
                 
                 r.msgs.push(sysMsg);
+                write('rooms.json', rooms);
+                io.to(d.roomId).emit('new_msg', sysMsg);
+                return;
+            }
+
+            // !down — включить режим "сервер недоступен" (только Омикрун)
+            if(/^!down$/i.test(d.text.trim())) {
+                if(me.username !== ADMIN_LOGIN) return socket.emit('error', 'Только Омикрун может выключать сервер.');
+                SERVER_DOWN = true;
+                broadcastServerState();
+                const sysMsg = createMsg('System', null, SERVER_DOWN_MESSAGE, 'text', r);
+                r.msgs.push(sysMsg);
+                if(r.msgs.length > 200) r.msgs.shift();
                 write('rooms.json', rooms);
                 io.to(d.roomId).emit('new_msg', sysMsg);
                 return;

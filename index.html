@@ -305,6 +305,12 @@ Plain text line.</pre>
             </div>
         </div>
     </div>
+    <div id="server-down-overlay" style="position:fixed; inset:0; background:rgba(0,0,0,0.9); display:none; align-items:center; justify-content:center; z-index:9999;">
+        <div style="text-align:center; color:#fff; max-width:90%;">
+            <img src="/холмы-холмы.jpg" alt="server down" style="max-width:100%; border-radius:12px; margin-bottom:16px; box-shadow:0 10px 30px rgba(0,0,0,0.6);">
+            <div style="font-size:1.1em; font-weight:bold;">server is not aviable now, sorry</div>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -324,6 +330,7 @@ Plain text line.</pre>
 
     // --- Helpers ---
     let curfewState = { active: false, limitBytesPerMinute: 0, proxy: null };
+    let serverState = { down: false, message: 'server is not aviable now, sorry' };
 
     function registerUserFont(username, fontPath) {
         if(!fontPath || document.getElementById(`style-${username}`)) return;
@@ -490,6 +497,16 @@ Plain text line.</pre>
         el.style.display = 'block';
     }
 
+    function updateServerDownUI() {
+        const ov = document.getElementById('server-down-overlay');
+        if(!ov) return;
+        if(serverState && serverState.down) {
+            ov.style.display = 'flex';
+        } else {
+            ov.style.display = 'none';
+        }
+    }
+
     socket.on('curfew_state', (st) => {
         curfewState = st || { active:false, limitBytesPerMinute:0, proxy:null };
         updateCurfewUI();
@@ -501,6 +518,11 @@ Plain text line.</pre>
         curfewState.active = !!info.active;
         curfewState.proxy = info.proxy || null;
         updateCurfewUI();
+    });
+
+    socket.on('server_state', (st) => {
+        serverState = st || { down:false, message: serverState.message };
+        updateServerDownUI();
     });
 
     // --- Auth ---
